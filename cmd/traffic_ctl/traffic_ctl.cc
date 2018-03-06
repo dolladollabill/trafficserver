@@ -222,7 +222,7 @@ main(int argc, const char **argv)
 
   ArgumentDescription argument_descriptions[] = {
     {"debug", '-', "Enable debugging output", "F", &debug, nullptr, nullptr},
-    HELP_ARGUMENT_DESCRIPTION(),
+    //HELP_ARGUMENT_DESCRIPTION(), //quick fix to get subcommands to show up when -h or --help arguments given
     VERSION_ARGUMENT_DESCRIPTION(),
     RUNROOT_ARGUMENT_DESCRIPTION(),
   };
