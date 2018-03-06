@@ -177,6 +177,21 @@ enum HttpPluginTunnel_t {
 class CoreUtils;
 class PluginVCCore;
 
+class PostDataBuffers
+{
+public:
+  PostDataBuffers() { Debug("http_redirect", "[PostDataBuffers::PostDataBuffers]"); }
+  MIOBuffer *postdata_copy_buffer            = nullptr;
+  IOBufferReader *postdata_copy_buffer_start = nullptr;
+  IOBufferReader *ua_buffer_reader           = nullptr;
+
+  void clear();
+  void init(IOBufferReader *ua_reader);
+  void copy_partial_post_data();
+
+  ~PostDataBuffers();
+};
+
 class HttpSM : public Continuation
 {
   friend class HttpPagesHandler;
@@ -296,6 +311,14 @@ public:
 
   HttpTransact::State t_state;
 
+  // _postbuf api
+  int64_t postbuf_reader_avail();
+  int64_t postbuf_buffer_avail();
+  void postbuf_clear();
+  void disable_redirect();
+  void postbuf_copy_partial_data();
+  void postbuf_init(IOBufferReader *ua_reader);
+
 protected:
   int reentrancy_count = 0;
 
@@ -307,8 +330,8 @@ protected:
   void remove_ua_entry();
 
 public:
-  ProxyClientTransaction *ua_session = nullptr;
-  BackgroundFill_t background_fill   = BACKGROUND_FILL_NONE;
+  ProxyClientTransaction *ua_txn   = nullptr;
+  BackgroundFill_t background_fill = BACKGROUND_FILL_NONE;
   // AuthHttpAdapter authAdapter;
   void set_http_schedule(Continuation *);
   int get_http_schedule(int event, void *data);
@@ -375,7 +398,6 @@ protected:
   int state_auth_callback(int event, void *data);
   int state_add_to_list(int event, void *data);
   int state_remove_from_list(int event, void *data);
-  int state_congestion_control_lookup(int event, void *data);
 
   // Y! ebalsa: remap handlers
   int state_remap_request(int event, void *data);
@@ -432,8 +454,6 @@ protected:
   void do_drain_request_body();
 #endif
 
-  bool do_congestion_control_lookup();
-
   virtual void handle_api_return();
   void handle_server_setup_error(int event, void *data);
   void handle_http_server_open();
@@ -466,7 +486,7 @@ protected:
   void perform_cache_write_action();
   void perform_transform_cache_write_action();
   void perform_nca_cache_action();
-  void setup_blind_tunnel(bool send_response_hdr);
+  void setup_blind_tunnel(bool send_response_hdr, IOBufferReader *initial = nullptr);
   HttpTunnelProducer *setup_server_transfer_to_transform();
   HttpTunnelProducer *setup_transfer_from_transform();
   HttpTunnelProducer *setup_cache_transfer_to_transform();
@@ -561,6 +581,22 @@ public:
   {
     return terminate_sm;
   }
+
+  int
+  client_connection_id() const
+  {
+    return _client_connection_id;
+  }
+
+  int
+  client_transaction_id() const
+  {
+    return _client_transaction_id;
+  }
+
+private:
+  PostDataBuffers _postbuf;
+  int _client_connection_id = -1, _client_transaction_id = -1;
 };
 
 // Function to get the cache_sm object - YTS Team, yamsat
@@ -655,8 +691,44 @@ HttpSM::add_cache_sm()
 inline bool
 HttpSM::is_transparent_passthrough_allowed()
 {
-  return (t_state.client_info.is_transparent && ua_session->is_transparent_passthrough_allowed() &&
-          ua_session->get_transact_count() == 1);
+  return (t_state.client_info.is_transparent && ua_txn->is_transparent_passthrough_allowed() && ua_txn->get_transact_count() == 1);
+}
+
+inline int64_t
+HttpSM::postbuf_reader_avail()
+{
+  return this->_postbuf.ua_buffer_reader->read_avail();
+}
+
+inline int64_t
+HttpSM::postbuf_buffer_avail()
+{
+  return this->_postbuf.postdata_copy_buffer_start->read_avail();
+}
+
+inline void
+HttpSM::postbuf_clear()
+{
+  this->_postbuf.clear();
+}
+
+inline void
+HttpSM::disable_redirect()
+{
+  this->enable_redirection = false;
+  this->_postbuf.clear();
+}
+
+inline void
+HttpSM::postbuf_copy_partial_data()
+{
+  this->_postbuf.copy_partial_post_data();
+}
+
+inline void
+HttpSM::postbuf_init(IOBufferReader *ua_reader)
+{
+  this->_postbuf.init(ua_reader);
 }
 
 #endif

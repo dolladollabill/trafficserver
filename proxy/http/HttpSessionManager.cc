@@ -64,7 +64,7 @@ ServerSessionPool::purge()
 }
 
 bool
-ServerSessionPool::match(HttpServerSession *ss, sockaddr const *addr, INK_MD5 const &hostname_hash,
+ServerSessionPool::match(HttpServerSession *ss, sockaddr const *addr, CryptoHash const &hostname_hash,
                          TSServerSessionSharingMatchType match_style)
 {
   return TS_SERVER_SESSION_SHARING_MATCH_NONE != match_style && // if no matching allowed, fail immediately.
@@ -92,8 +92,8 @@ ServerSessionPool::validate_sni(HttpSM *sm, NetVConnection *netvc)
 }
 
 HSMresult_t
-ServerSessionPool::acquireSession(sockaddr const *addr, INK_MD5 const &hostname_hash, TSServerSessionSharingMatchType match_style,
-                                  HttpSM *sm, HttpServerSession *&to_return)
+ServerSessionPool::acquireSession(sockaddr const *addr, CryptoHash const &hostname_hash,
+                                  TSServerSessionSharingMatchType match_style, HttpSM *sm, HttpServerSession *&to_return)
 {
   HSMresult_t zret = HSM_NOT_FOUND;
   if (TS_SERVER_SESSION_SHARING_MATCH_HOST == match_style) {
@@ -264,21 +264,21 @@ HttpSessionManager::purge_keepalives()
 
 HSMresult_t
 HttpSessionManager::acquire_session(Continuation * /* cont ATS_UNUSED */, sockaddr const *ip, const char *hostname,
-                                    ProxyClientTransaction *ua_session, HttpSM *sm)
+                                    ProxyClientTransaction *ua_txn, HttpSM *sm)
 {
   HttpServerSession *to_return = nullptr;
   TSServerSessionSharingMatchType match_style =
     static_cast<TSServerSessionSharingMatchType>(sm->t_state.txn_conf->server_session_sharing_match);
-  INK_MD5 hostname_hash;
+  CryptoHash hostname_hash;
   HSMresult_t retval = HSM_NOT_FOUND;
 
-  ink_code_md5((unsigned char *)hostname, strlen(hostname), (unsigned char *)&hostname_hash);
+  CryptoContext().hash_immediate(hostname_hash, (unsigned char *)hostname, strlen(hostname));
 
   // First check to see if there is a server session bound
   //   to the user agent session
-  to_return = ua_session->get_server_session();
+  to_return = ua_txn->get_server_session();
   if (to_return != nullptr) {
-    ua_session->attach_server_session(nullptr);
+    ua_txn->attach_server_session(nullptr);
 
     // Since the client session is reusing the same server session, it seems that the SNI should match
     // Will the client make requests to different hosts over the same SSL session? Though checking
@@ -326,21 +326,17 @@ HttpSessionManager::acquire_session(Continuation * /* cont ATS_UNUSED */, sockad
           UnixNetVConnection *server_vc = dynamic_cast<UnixNetVConnection *>(to_return->get_netvc());
           if (server_vc) {
             UnixNetVConnection *new_vc = server_vc->migrateToCurrentThread(sm, ethread);
-            // The VC moved, free up the original one
-            if (new_vc != server_vc) {
-              ink_assert(new_vc == nullptr || new_vc->nh != nullptr);
-              if (!new_vc) {
-                // Close out to_return, we were't able to get a connection
-                to_return->do_io_close();
-                to_return = nullptr;
-                retval    = HSM_NOT_FOUND;
-              } else {
-                // Keep things from timing out on us
-                new_vc->set_inactivity_timeout(new_vc->get_inactivity_timeout());
-                to_return->set_netvc(new_vc);
-              }
+            if (new_vc->thread != ethread) {
+              // Failed to migrate, put it back to global session pool
+              m_g_pool->releaseSession(to_return);
+              to_return = nullptr;
+              retval    = HSM_NOT_FOUND;
+            } else if (new_vc != server_vc) {
+              // The VC migrated, keep things from timing out on us
+              new_vc->set_inactivity_timeout(new_vc->get_inactivity_timeout());
+              to_return->set_netvc(new_vc);
             } else {
-              // Keep things from timing out on us
+              // The VC moved, keep things from timing out on us
               server_vc->set_inactivity_timeout(server_vc->get_inactivity_timeout());
             }
           }

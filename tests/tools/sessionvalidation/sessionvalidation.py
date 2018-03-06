@@ -23,7 +23,10 @@ import sessionvalidation.transaction as transaction
 import sessionvalidation.request as request
 import sessionvalidation.response as response
 
-valid_HTTP_request_methods = ['GET', 'POST', 'HEAD']
+# valid_HTTP_request_methods = ['GET', 'POST', 'HEAD']
+# custom_HTTP_request_methods = ['PULL']  # transaction monitor plugin for ATS may have custom methods
+allowed_HTTP_request_methods = ['GET', 'POST', 'HEAD', 'PULL']
+G_CUSTOM_METHODS = False
 G_VERBOSE_LOG = True
 
 
@@ -169,7 +172,7 @@ class SessionValidator(object):
             elif float(txn_req.getTimestamp()) <= 0:
                 _verbose_print("invalid transaction request timestamp")
                 retval = False
-            elif txn_req.getHeaders().split()[0] not in valid_HTTP_request_methods:
+            elif txn_req.getHeaders().split()[0] not in allowed_HTTP_request_methods:
                 _verbose_print("invalid HTTP method for transaction {0}".format(txn_req.getHeaders().split()[0]))
                 retval = False
             elif not txn_req.getHeaders().endswith("\r\n\r\n"):
@@ -250,8 +253,10 @@ class SessionValidator(object):
         ''' Returns an iterator of bad session filenames (iterator of strings) '''
         return iter(self._bad_sessions)
 
-    def __init__(self, json_log_dir):
+    def __init__(self, json_log_dir, allow_custom=False):
         global valid_HTTP_request_methods
+        global G_CUSTOM_METHODS
+        G_CUSTOM_METHODS = allow_custom
         self._json_log_dir = json_log_dir
         self._bad_sessions = list()   # list of filenames
         self._sessions = list()       # list of _good_ session objects

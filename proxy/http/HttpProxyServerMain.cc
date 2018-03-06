@@ -39,12 +39,24 @@
 #include "ProtocolProbeSessionAccept.h"
 #include "http2/Http2SessionAccept.h"
 #include "HttpConnectionCount.h"
+#include "HttpProxyServerMain.h"
+
+#include <vector>
 
 HttpSessionAccept *plugin_http_accept             = nullptr;
 HttpSessionAccept *plugin_http_transparent_accept = nullptr;
 
 static SLL<SSLNextProtocolAccept> ssl_plugin_acceptors;
 static Ptr<ProxyMutex> ssl_plugin_mutex;
+
+// used to keep count of how many et_net threads we have started
+std::atomic<int> started_et_net_threads;
+std::mutex proxyServerMutex;
+std::condition_variable proxyServerCheck;
+bool et_net_threads_ready = false;
+
+extern int num_of_net_threads;
+extern int num_accept_threads;
 
 bool
 ssl_register_protocol(const char *protocol, Continuation *contp)
@@ -105,7 +117,7 @@ struct HttpProxyAcceptor {
     @c SSLNextProtocolAccept is a subclass of @c Cont instead of @c
     HttpAccept.
 */
-Vec<HttpProxyAcceptor> HttpProxyAcceptors;
+std::vector<HttpProxyAcceptor> HttpProxyAcceptors;
 
 // Called from InkAPI.cc
 NetProcessor::AcceptOptions
@@ -225,7 +237,7 @@ MakeHttpProxyAcceptor(HttpProxyAcceptor &acceptor, HttpProxyPort &port, unsigned
 
 /// Do all pre-thread initialization / setup.
 void
-init_HttpProxyServer()
+prep_HttpProxyServer()
 {
   httpSessionManager.init();
 }
@@ -265,8 +277,29 @@ init_accept_HttpProxyServer(int n_accept_threads)
   }
 
   // Do the configuration defined ports.
-  for (int i = 0, n = proxy_ports.length(); i < n; ++i) {
-    MakeHttpProxyAcceptor(HttpProxyAcceptors.add(), proxy_ports[i], n_accept_threads);
+  // Assign temporary empty objects of proxy ports size
+  HttpProxyAcceptors.assign(proxy_ports.size(), HttpProxyAcceptor());
+  for (int i = 0, n = proxy_ports.size(); i < n; ++i) {
+    MakeHttpProxyAcceptor(HttpProxyAcceptors.at(i), proxy_ports[i], n_accept_threads);
+  }
+}
+
+/** Increment the counter to keep track of how many et_net threads
+ *  we have started. This function is scheduled at the start of each
+ *  et_net thread using schedule_spawn(). We also check immediately
+ *  after incrementing the counter to see whether all of the et_net
+ *  threads have started such that we can notify main() to call
+ *  start_HttpProxyServer().
+ */
+void
+init_HttpProxyServer(EThread *)
+{
+  auto check_et_net_num = ++started_et_net_threads;
+  if (check_et_net_num == num_of_net_threads) {
+    std::unique_lock<std::mutex> lock(proxyServerMutex);
+    et_net_threads_ready = true;
+    lock.unlock();
+    proxyServerCheck.notify_one();
   }
 }
 
@@ -281,9 +314,9 @@ start_HttpProxyServer()
   ///////////////////////////////////
 
   ink_assert(!called_once);
-  ink_assert(proxy_ports.length() == HttpProxyAcceptors.length());
+  ink_assert(proxy_ports.size() == HttpProxyAcceptors.size());
 
-  for (int i = 0, n = proxy_ports.length(); i < n; ++i) {
+  for (int i = 0, n = proxy_ports.size(); i < n; ++i) {
     HttpProxyAcceptor &acceptor = HttpProxyAcceptors[i];
     HttpProxyPort &port         = proxy_ports[i];
     if (port.isSSL()) {
@@ -314,6 +347,14 @@ start_HttpProxyServer()
     hook->invoke(TS_EVENT_LIFECYCLE_PORTS_READY, nullptr);
     hook = hook->next();
   }
+
+  // Start the back door, since it's just a special HttpProxyServer,
+  // the requirements to start it has been met if we got here.
+  int back_door_port = NO_FD;
+  REC_ReadConfigInteger(back_door_port, "proxy.config.process_manager.mgmt_port");
+  if (back_door_port != NO_FD) {
+    start_HttpProxyServerBackDoor(back_door_port, !!num_accept_threads); // One accept thread is enough
+  }
 }
 
 void
@@ -330,4 +371,11 @@ start_HttpProxyServerBackDoor(int port, int accept_threads)
 
   // The backdoor only binds the loopback interface
   netProcessor.main_accept(new HttpSessionAccept(ha_opt), NO_FD, opt);
+}
+
+void
+stop_HttpProxyServer()
+{
+  sslNetProcessor.stop_accept();
+  netProcessor.stop_accept();
 }

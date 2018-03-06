@@ -2155,9 +2155,9 @@ static int
 checkHttpTxnIncomingAddrGet(SocketTest *test, void *data)
 {
   uint16_t port;
-  HttpProxyPort *proxy_port = HttpProxyPort::findHttp(AF_INET);
-  TSHttpTxn txnp            = (TSHttpTxn)data;
-  sockaddr const *ptr       = TSHttpTxnIncomingAddrGet(txnp);
+  const HttpProxyPort *proxy_port = HttpProxyPort::findHttp(AF_INET);
+  TSHttpTxn txnp                  = (TSHttpTxn)data;
+  sockaddr const *ptr             = TSHttpTxnIncomingAddrGet(txnp);
 
   if (nullptr == proxy_port) {
     SDK_RPRINT(test->regtest, "TSHttpTxnIncomingPortGet", "TestCase1", TC_FAIL,
@@ -3278,12 +3278,21 @@ REGRESSION_TEST(SDK_API_TSHttpHdr)(RegressionTest *test, int /* atype ATS_UNUSED
   }
 
   if (strcmp("Not Modified", TSHttpHdrReasonLookup(TS_HTTP_STATUS_NOT_MODIFIED)) != 0) {
-    SDK_RPRINT(test, "TSHttpHdrReasonLookup", "TestCase2", TC_FAIL, "TSHttpHdrReasonLookup returns Value's mismatch");
+    SDK_RPRINT(test, "TSHttpHdrReasonLookup", "TestCase4", TC_FAIL, "TSHttpHdrReasonLookup returns Value's mismatch");
     if (test_passed_Http_Hdr_Reason_Lookup == true) {
       test_passed_Http_Hdr_Reason_Lookup = false;
     }
   } else {
     SDK_RPRINT(test, "TSHttpHdrReasonLookup", "TestCase4", TC_PASS, "ok");
+  }
+
+  if (strcmp("Early Hints", TSHttpHdrReasonLookup(TS_HTTP_STATUS_EARLY_HINTS)) != 0) {
+    SDK_RPRINT(test, "TSHttpHdrReasonLookup", "TestCase5", TC_FAIL, "TSHttpHdrReasonLookup returns Value's mismatch");
+    if (test_passed_Http_Hdr_Reason_Lookup == true) {
+      test_passed_Http_Hdr_Reason_Lookup = false;
+    }
+  } else {
+    SDK_RPRINT(test, "TSHttpHdrReasonLookup", "TestCase5", TC_PASS, "ok");
   }
 
   // Copy
@@ -5470,6 +5479,7 @@ typedef enum {
 
   ORIG_TS_HTTP_STATUS_CONTINUE           = 100,
   ORIG_TS_HTTP_STATUS_SWITCHING_PROTOCOL = 101,
+  ORIG_TS_HTTP_STATUS_EARLY_HINTS        = 103,
 
   ORIG_TS_HTTP_STATUS_OK                            = 200,
   ORIG_TS_HTTP_STATUS_CREATED                       = 201,
@@ -5534,7 +5544,9 @@ typedef enum {
   ORIG_TS_SSL_SNI_HOOK,
   ORIG_TS_SSL_SERVERNAME_HOOK,
   ORIG_TS_SSL_SERVER_VERIFY_HOOK,
-  ORIG_TS_SSL_LAST_HOOK = ORIG_TS_SSL_SERVER_VERIFY_HOOK,
+  ORIG_TS_SSL_VERIFY_CLIENT_HOOK,
+  ORIG_TS_SSL_SESSION_HOOK,
+  ORIG_TS_SSL_LAST_HOOK = ORIG_TS_SSL_SESSION_HOOK,
   ORIG_TS_HTTP_LAST_HOOK
 } ORIG_TSHttpHookID;
 
@@ -5640,6 +5652,8 @@ REGRESSION_TEST(SDK_API_TSConstant)(RegressionTest *test, int /* atype ATS_UNUSE
   PRINT_DIFF(TS_HTTP_STATUS_NONE);
   PRINT_DIFF(TS_HTTP_STATUS_CONTINUE);
   PRINT_DIFF(TS_HTTP_STATUS_SWITCHING_PROTOCOL);
+  PRINT_DIFF(TS_HTTP_STATUS_EARLY_HINTS);
+
   PRINT_DIFF(TS_HTTP_STATUS_OK);
   PRINT_DIFF(TS_HTTP_STATUS_CREATED);
 
@@ -7589,7 +7603,8 @@ const char *SDK_Overridable_Configs[TS_CONFIG_LAST_ENTRY] = {"proxy.config.url_r
                                                              "proxy.config.http.parent_proxy.per_parent_connect_attempts",
                                                              "proxy.config.http.parent_proxy.connect_attempts_timeout",
                                                              "proxy.config.http.normalize_ae",
-                                                             "proxy.config.http.insert_forwarded"};
+                                                             "proxy.config.http.insert_forwarded",
+                                                             "proxy.config.http.allow_multi_range"};
 
 REGRESSION_TEST(SDK_API_OVERRIDABLE_CONFIGS)(RegressionTest *test, int /* atype ATS_UNUSED */, int *pstatus)
 {

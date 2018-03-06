@@ -411,6 +411,19 @@ Thread Variables
    This setting specifies the number of active client connections
    for use by :option:`traffic_ctl server restart --drain`.
 
+.. ts:cv:: CONFIG proxy.config.restart.stop_listening INT 0
+   :reloadable:
+
+   This option specifies whether |TS| should close listening sockets while shutting down gracefully.
+
+   ===== ======================================================================
+   Value Description
+   ===== ======================================================================
+   ``0`` Listening sockets will be kept open.
+   ``1`` Listening sockets will be closed when |TS| starts shutting down.
+   ===== ======================================================================
+
+
 .. ts:cv:: CONFIG proxy.config.stop.shutdown_timeout INT 0
    :reloadable:
 
@@ -1520,12 +1533,6 @@ Origin Server Connect Attempts
 Congestion Control
 ==================
 
-.. ts:cv:: CONFIG proxy.config.http.congestion_control.enabled INT 0
-
-   Enables (``1``) or disables (``0``) the Congestion Control option, which configures Traffic Server to stop forwarding
-   HTTP requests to origin servers when they become congested. Traffic Server sends the client a message to retry the
-   congested origin server later. Refer to :ref:`using-congestion-control`.
-
 .. ts:cv:: CONFIG proxy.config.http.flow_control.enabled INT 0
    :overridable:
 
@@ -1731,6 +1738,22 @@ Security
    value will limit the size of post bodies. If a request is received with a
    post body larger than this limit the response will be terminated with
    413 - Request Entity Too Large and logged accordingly.
+
+.. ts:cv:: CONFIG proxy.config.http.allow_multi_range INT 0
+   :reloadable:
+   :overridable:
+
+   This option allows the administrator to configure different behavior and
+   handling of requests with multiple ranges in the ``Range`` header.
+
+   ===== ======================================================================
+   Value Description
+   ===== ======================================================================
+   ``0`` Do not allow multiple ranges, effectively ignoring the ``Range`` header
+   ``1`` Allows multiple ranges. This can be potentially dangerous since well
+         formed requests can cause excessive resource consumption on the server.
+   ``2`` Similar to 0, except return a 416 error code and no response body.
+   ===== ======================================================================
 
 Cache Control
 =============
@@ -2967,7 +2990,13 @@ Diagnostic Logging Configuration
 .. ts:cv:: CONFIG proxy.config.diags.debug.enabled INT 0
    :reloadable:
 
-   Enables logging for diagnostic messages whose log level is `diag` or `debug`.
+   When set to 1, enables logging for diagnostic messages whose log level is `diag` or `debug`.
+
+   When set to 2, interprets the :ts:cv:`proxy.config.diags.debug.client_ip` setting determine whether diagnostic messages are logged.
+
+.. ts:cv:: CONFIG proxy.config.diags.debug.client_ip STRING NULL
+
+   if :ts:cv:`proxy.config.diags.debug.enabled` is set to 2, this value is tested against the source IP of the incoming connection.  If there is a match, all the diagnostic messages for that connection and the related outgoing connection will be logged.
 
 .. ts:cv:: CONFIG proxy.config.diags.debug.tags STRING http|dns
 
@@ -3188,6 +3217,11 @@ SSL Termination
    ``head -c48 /dev/urandom | openssl enc -base64 | head -c48 > file.ticket``. Also
    note that OpenSSL session tickets are sensitive to the version of the ca-certificates.
 
+.. ts:cv:: CONFIG proxy.config.ssl.servername.filename STRING ssl_server_name.config
+
+   The filename of the :file:`ssl_server_name.config` configuration file. If relative, it is relative to the
+   configuration directory (ts:cv:`proxy.config.config_dir`).
+
 .. ts:cv:: CONFIG proxy.config.ssl.max_record_size INT 0
 
   This configuration specifies the maximum number of bytes to write
@@ -3315,9 +3349,7 @@ SSL Termination
 
 .. ts:cv:: CONFIG proxy.config.ssl.wire_trace_server_name STRING NULL
 
-   This specifies the server name for which wire_traces should be
-   printed. This only works if traffic_server is built with
-   TS_USE_TLS_SNI flag set to true.
+   This specifies the server name for which wire_traces should be printed.
 
 Client-Related Configuration
 ----------------------------
@@ -3363,6 +3395,23 @@ Client-Related Configuration
 
    Specifies the location of the certificate authority file against
    which the origin server will be verified.
+
+.. ts:cv:: CONFIG proxy.config.ssl.client.SSLv3 INT 0
+
+   Enables (``1``) or disables (``0``) SSLv3 in the ATS client context. Disabled by default
+
+.. ts:cv:: CONFIG proxy.config.ssl.client.TLSv1 INT 1
+
+   Enables (``1``) or disables (``0``) TLSv1 in the ATS client context. If not specified, enabled by default
+
+.. ts:cv:: CONFIG proxy.config.ssl.client.TLSv1_1 INT 1
+
+   Enables (``1``) or disables (``0``) TLSv1_1 in the ATS client context. If not specified, enabled by default
+
+.. ts:cv:: CONFIG proxy.config.ssl.client.TLSv1_2 INT 1
+
+   Enables (``1``) or disables (``0``) TLSv1_2 in the ATS client context. If not specified, enabled by default
+
 
 OCSP Stapling Configuration
 ===========================
@@ -3454,14 +3503,22 @@ HTTP/2 Configuration
 
    Enable the experimental HTTP/2 Stream Priority feature.
 
+.. ts:cv:: CONFIG proxy.config.http2.active_timeout_in INT 0
+   :reloadable:
+
+   This is the active timeout of the http2 connection. It is set when the connection is opened
+   and keeps ticking regardless of activity level.
+
+   The value of ``0`` specifies that there is no timeout.
+
 .. ts:cv:: CONFIG proxy.config.http2.accept_no_activity_timeout INT 120
    :reloadable:
    :overridable:
 
-   Specifies how long Traffic Server keeps connections to origin servers open
-   if the transaction stalls. Lowering this timeout can ease pressure on the
-   proxy if misconfigured or misbehaving clients are opening a large number of
-   connections without submitting requests.
+   Specifies how long Traffic Server keeps connections to clients open if no
+   activity is received on the connection. Lowering this timeout can ease
+   pressure on the proxy if misconfigured or misbehaving clients are opening
+   a large number of connections without submitting requests.
 
 .. ts:cv:: CONFIG proxy.config.http2.no_activity_timeout_in INT 120
    :reloadable:

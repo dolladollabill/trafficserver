@@ -405,7 +405,7 @@ UrlRewrite::PerformACLFiltering(HttpTransact::State *s, url_mapping *map)
       bool match = true;
 
       if (rp->method_restriction_enabled) {
-        if (method_wksidx != -1) {
+        if (method_wksidx >= 0 && method_wksidx < HTTP_WKSIDX_METHODS_CNT) {
           match = rp->standard_method_lookup[method_wksidx];
         } else if (!rp->nonstandard_methods.empty()) {
           match = false;
@@ -437,7 +437,7 @@ UrlRewrite::PerformACLFiltering(HttpTransact::State *s, url_mapping *map)
         match = false;
         for (int j = 0; j < rp->in_ip_cnt && !match; j++) {
           IpEndpoint incoming_addr;
-          incoming_addr.assign(s->state_machine->ua_session->get_netvc()->get_local_addr());
+          incoming_addr.assign(s->state_machine->ua_txn->get_netvc()->get_local_addr());
           if (is_debug_tag_set("url_rewrite")) {
             char buf1[128], buf2[128], buf3[128];
             ats_ip_ntop(incoming_addr, buf1, sizeof(buf1));
@@ -459,7 +459,7 @@ UrlRewrite::PerformACLFiltering(HttpTransact::State *s, url_mapping *map)
       }
 
       if (rp->internal) {
-        match = s->state_machine->ua_session->get_netvc()->get_is_internal_request();
+        match = s->state_machine->ua_txn->get_netvc()->get_is_internal_request();
         Debug("url_rewrite", "%s an internal request", match ? "matched" : "didn't match");
       }
 

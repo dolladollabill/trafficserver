@@ -993,7 +993,7 @@ getCcPlugin()
     data->keep_pass_list        = new UsecList();
     data->seq_id                = 0;
     data->global_config         = nullptr;
-    TSHttpArgIndexReserve(PLUGIN_NAME, "reserve txn_data slot", &(data->txn_slot));
+    TSHttpTxnArgIndexReserve(PLUGIN_NAME, "reserve txn_data slot", &(data->txn_slot));
 
     if (TS_SUCCESS == TSMgmtIntGet("proxy.config.cache.enable_read_while_writer", &read_while_writer) && read_while_writer > 0) {
       data->read_while_writer = true;
@@ -1039,7 +1039,7 @@ TSRemapInit(TSRemapInterface *api_info, char *errbuf, int errbuf_size)
   }
 
   if (api_info->tsremap_version < TSREMAP_VERSION) {
-    snprintf(errbuf, errbuf_size - 1, "[TSRemapInit] - Incorrect API version %ld.%ld", api_info->tsremap_version >> 16,
+    snprintf(errbuf, errbuf_size, "[TSRemapInit] - Incorrect API version %ld.%ld", api_info->tsremap_version >> 16,
              (api_info->tsremap_version & 0xffff));
     return TS_ERROR;
   }
@@ -1119,6 +1119,8 @@ TSPluginInit(int argc, const char *argv[])
   info.plugin_name   = const_cast<char *>(PLUGIN_NAME);
   info.vendor_name   = const_cast<char *>(PLUGIN_VENDOR);
   info.support_email = const_cast<char *>(PLUGIN_SUPPORT);
+
+  TSError("[collapsed_connection] This plugin is deprecated as of ATS v7.1, use collapsed_forwarding instead!");
 
   if (TS_SUCCESS != TSPluginRegister(&info)) {
     TSError("[collapsed_connection] Plugin registration failed");

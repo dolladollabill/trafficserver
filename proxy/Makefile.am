@@ -19,7 +19,7 @@
 include $(top_srcdir)/build/tidy.mk
 
 # Note that hdrs is targeted from ../Makefile.am
-SUBDIRS = congest http http2 logging config
+SUBDIRS = http http2 logging config
 noinst_LIBRARIES =
 bin_PROGRAMS = \
   traffic_server \
@@ -42,6 +42,7 @@ AM_CPPFLAGS += \
   -I$(abs_top_srcdir)/mgmt \
   -I$(abs_top_srcdir)/mgmt/utils \
   -I$(abs_top_srcdir)/lib \
+  $(TS_INCLUDES) \
   @OPENSSL_INCLUDES@
 
 # NOTE: it is safe to use AM_LDFLAGS here because we are only building executables. If we start
@@ -136,6 +137,8 @@ traffic_server_SOURCES = \
   Crash.cc \
   EventName.cc \
   FetchSM.cc \
+  HostStatus.cc \
+  HostStatus.h \
   IPAllow.cc \
   IPAllow.h \
   InkAPI.cc \
@@ -148,6 +151,7 @@ traffic_server_SOURCES = \
   ParentConsistentHash.h \
   ParentRoundRobin.cc \
   ParentRoundRobin.h \
+  ParentSelectionStrategy.cc \
   ParentSelection.cc \
   ParentSelection.h \
   Plugin.cc \
@@ -180,7 +184,6 @@ traffic_server_LDADD = \
   http/libhttp.a \
   http2/libhttp2.a \
   http/remap/libhttp_remap.a \
-  congest/libCongestionControl.a \
   logging/liblogging.a \
   logging/liblogcollation.a \
   hdrs/libhdrs.a  \
@@ -205,6 +208,7 @@ traffic_server_LDADD += \
   $(top_builddir)/iocore/eventsystem/libinkevent.a \
   $(top_builddir)/lib/records/librecords_p.a \
   $(top_builddir)/iocore/eventsystem/libinkevent.a \
+  $(top_builddir)/lib/tsconfig/libtsconfig.la \
   @HWLOC_LIBS@ \
   @LIBPCRE@ \
   @LIBTCL@ \

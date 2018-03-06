@@ -38,8 +38,6 @@ struct NetCmdOperation {
 
 // Requests always begin with a OpType, followed by aditional fields.
 static const struct NetCmdOperation requests[] = {
-  /* FILE_READ                  */ {2, {MGMT_MARSHALL_INT, MGMT_MARSHALL_INT}},
-  /* FILE_WRITE                 */ {4, {MGMT_MARSHALL_INT, MGMT_MARSHALL_INT, MGMT_MARSHALL_INT, MGMT_MARSHALL_DATA}},
   /* RECORD_SET                 */ {3, {MGMT_MARSHALL_INT, MGMT_MARSHALL_STRING, MGMT_MARSHALL_STRING}},
   /* RECORD_GET                 */ {2, {MGMT_MARSHALL_INT, MGMT_MARSHALL_STRING}},
   /* PROXY_STATE_GET            */ {1, {MGMT_MARSHALL_INT}},
@@ -65,8 +63,6 @@ static const struct NetCmdOperation requests[] = {
 
 // Responses always begin with a TSMgmtError code, followed by additional fields.
 static const struct NetCmdOperation responses[] = {
-  /* FILE_READ                  */ {3, {MGMT_MARSHALL_INT, MGMT_MARSHALL_INT, MGMT_MARSHALL_DATA}},
-  /* FILE_WRITE                 */ {1, {MGMT_MARSHALL_INT}},
   /* RECORD_SET                 */ {2, {MGMT_MARSHALL_INT, MGMT_MARSHALL_INT}},
   /* RECORD_GET                 */
   {5, {MGMT_MARSHALL_INT, MGMT_MARSHALL_INT, MGMT_MARSHALL_INT, MGMT_MARSHALL_STRING, MGMT_MARSHALL_DATA}},
@@ -195,7 +191,6 @@ send_mgmt_error(int fd, OpType optype, TSMgmtError error)
   switch (optype) {
   case OpType::BOUNCE:
   case OpType::EVENT_RESOLVE:
-  case OpType::FILE_WRITE:
   case OpType::LIFECYCLE_MESSAGE:
   case OpType::PROXY_STATE_SET:
   case OpType::RECONFIGURE:
@@ -215,10 +210,6 @@ send_mgmt_error(int fd, OpType optype, TSMgmtError error)
   case OpType::SERVER_BACKTRACE:
     ink_release_assert(responses[static_cast<unsigned>(optype)].nfields == 2);
     return send_mgmt_response(fd, optype, &ecode, &strval);
-
-  case OpType::FILE_READ:
-    ink_release_assert(responses[static_cast<unsigned>(optype)].nfields == 3);
-    return send_mgmt_response(fd, optype, &ecode, &intval, &dataval);
 
   case OpType::RECORD_GET:
   case OpType::RECORD_MATCH_GET:

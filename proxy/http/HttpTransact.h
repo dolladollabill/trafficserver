@@ -42,8 +42,6 @@
 #include "UrlMapping.h"
 #include <records/I_RecHttp.h>
 
-#include "congest/Congestion.h"
-
 #define MAX_DNS_LOOKUPS 2
 
 #define HTTP_RELEASE_ASSERT(X) ink_release_assert(X)
@@ -73,30 +71,6 @@
       }                                                         \
       RELEASE_PRINT_LOCK()                                      \
     }                                                           \
-  }
-
-#define TRANSACT_SETUP_RETURN(n, r) \
-  s->next_action           = n;     \
-  s->transact_return_point = r;     \
-  DebugSpecific((s->state_machine && s->state_machine->debug_on), "http_trans", "Next action %s; %s", #n, #r);
-
-#define TRANSACT_RETURN(n, r) \
-  TRANSACT_SETUP_RETURN(n, r) \
-  return;
-
-#define TRANSACT_RETURN_VAL(n, r, v) \
-  TRANSACT_SETUP_RETURN(n, r)        \
-  return v;
-
-#define SET_UNPREPARE_CACHE_ACTION(C)                               \
-  {                                                                 \
-    if (C.action == HttpTransact::CACHE_PREPARE_TO_DELETE) {        \
-      C.action = HttpTransact::CACHE_DO_DELETE;                     \
-    } else if (C.action == HttpTransact::CACHE_PREPARE_TO_UPDATE) { \
-      C.action = HttpTransact::CACHE_DO_UPDATE;                     \
-    } else {                                                        \
-      C.action = HttpTransact::CACHE_DO_WRITE;                      \
-    }                                                               \
   }
 
 typedef time_t ink_time_t;
@@ -220,7 +194,7 @@ enum ViaString_t {
 };
 
 struct HttpApiInfo {
-  char *parent_proxy_name       = NULL;
+  char *parent_proxy_name       = nullptr;
   int parent_proxy_port         = -1;
   bool cache_untransformed      = false;
   bool cache_transformed        = true;
@@ -370,7 +344,7 @@ public:
     TOTAL_RESPONSE_ERROR_TYPES
   };
 
-  // Please do not forget to fix TSServerState (ts/ts.h)
+  // Please do not forget to fix TSServerState (ts/apidefs.h.in)
   // in case of any modifications in ServerState_t
   enum ServerState_t {
     STATE_UNDEFINED = 0,
@@ -822,7 +796,7 @@ public:
 
     // INK API/Remap API plugin interface
     void *remap_plugin_instance = nullptr;
-    void *user_args[HTTP_SSN_TXN_MAX_USER_ARG];
+    void *user_args[TS_HTTP_MAX_USER_ARG];
     remap_plugin_info::_tsremap_os_response *fp_tsremap_os_response = nullptr;
     HTTPStatus http_return_code                                     = HTTP_STATUS_NONE;
 
@@ -855,12 +829,7 @@ public:
     UrlMappingContainer url_map;
     host_hdr_info hh_info = {nullptr, 0, 0};
 
-    // congestion control
-    CongestionEntry *pCongestionEntry              = nullptr;
-    StateMachineAction_t congest_saved_next_action = SM_ACTION_UNDEFINED;
-    int congestion_control_crat                    = 0; // 'client retry after'
-    int congestion_congested_or_failed             = 0;
-    int congestion_connection_opened               = 0;
+    int congestion_control_crat = 0; // Client retry after
 
     unsigned int filter_mask = 0;
     char *remap_redirect     = nullptr;
@@ -928,7 +897,7 @@ public:
       ats_free(internal_msg_buffer_type);
 
       ParentConfig::release(parent_params);
-      parent_params = NULL;
+      parent_params = nullptr;
 
       hdr_info.client_request.destroy();
       hdr_info.client_response.destroy();
@@ -944,21 +913,13 @@ public:
       redirect_info.original_url.destroy();
       redirect_info.redirect_url.destroy();
 
-      if (pCongestionEntry) {
-        if (congestion_connection_opened == 1) {
-          pCongestionEntry->connection_closed();
-          congestion_connection_opened = 0;
-        }
-        pCongestionEntry->put(), pCongestionEntry = NULL;
-      }
-
       url_map.clear();
       arena.reset();
       unmapped_url.clear();
       hostdb_entry.clear();
 
       delete[] ranges;
-      ranges      = NULL;
+      ranges      = nullptr;
       range_setup = RANGE_NONE;
       return;
     }
@@ -983,7 +944,7 @@ public:
         } else {
           ats_free(internal_msg_buffer);
         }
-        internal_msg_buffer = NULL;
+        internal_msg_buffer = nullptr;
       }
       internal_msg_buffer_size = 0;
     }
@@ -1003,6 +964,8 @@ public:
   static void HandleRequestAuthorized(State *s);
   static void BadRequest(State *s);
   static void Forbidden(State *s);
+  static void PostActiveTimeoutResponse(State *s);
+  static void PostInactiveTimeoutResponse(State *s);
   static void HandleFiltering(State *s);
   static void DecideCacheLookup(State *s);
   static void LookupSkipOpenServer(State *s);
@@ -1100,10 +1063,10 @@ public:
 
   static void build_request(State *s, HTTPHdr *base_request, HTTPHdr *outgoing_request, HTTPVersion outgoing_version);
   static void build_response(State *s, HTTPHdr *base_response, HTTPHdr *outgoing_response, HTTPVersion outgoing_version,
-                             HTTPStatus status_code, const char *reason_phrase = NULL);
+                             HTTPStatus status_code, const char *reason_phrase = nullptr);
   static void build_response(State *s, HTTPHdr *base_response, HTTPHdr *outgoing_response, HTTPVersion outgoing_version);
   static void build_response(State *s, HTTPHdr *outgoing_response, HTTPVersion outgoing_version, HTTPStatus status_code,
-                             const char *reason_phrase = NULL);
+                             const char *reason_phrase = nullptr);
 
   static void build_response_copy(State *s, HTTPHdr *base_response, HTTPHdr *outgoing_response, HTTPVersion outgoing_version);
   static void handle_content_length_header(State *s, HTTPHdr *header, HTTPHdr *base);

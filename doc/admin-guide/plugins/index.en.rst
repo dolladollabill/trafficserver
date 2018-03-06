@@ -131,6 +131,7 @@ directory of the |TS| source tree. Experimental plugins can be compiled by passi
    Epic <epic.en>
    Escalate <escalate.en>
    GeoIP ACL <geoip_acl.en>
+   FQ Pacing <fq_pacing.en>
    Header Frequency <header_freq.en>
    HIPES <hipes.en>
    Hook Trace <hook-trace.en>
@@ -142,6 +143,7 @@ directory of the |TS| source tree. Experimental plugins can be compiled by passi
    Signed URLs <url_sig.en>
    SSL Headers <sslheaders.en>
    Stale While Revalidate <stale_while_revalidate.en>
+   System Statistics <system_stats.en>
    TS Lua <ts_lua.en>
    WebP Transform <webp_transform.en>
 
@@ -166,6 +168,9 @@ directory of the |TS| source tree. Experimental plugins can be compiled by passi
 
 :doc:`Escalate <escalate.en>`
    Escalate: when the origin returns specific status codes, retry the request at a secondary origin (failover/fail-action)
+
+:doc:`FQ Pacing <fq_pacing.en>`
+   FQ Pacing: Rate Limit TCP connections using Linux's Fair Queuing queue discipline
 
 :doc:`GeoIP ACL <geoip_acl.en>`
    Deny or allow requests based on the source IP geo-location.
@@ -205,6 +210,9 @@ directory of the |TS| source tree. Experimental plugins can be compiled by passi
    :deprecated:
 
    Refresh content asynchronously while serving stale data.
+
+:doc:`System Stats <system_stats.en>`
+    Inserts system statistics in to the stats list
 
 :doc:`TS Lua <ts_lua.en>`
    Allows plugins to be written in Lua instead of C code.

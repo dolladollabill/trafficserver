@@ -43,8 +43,6 @@ using ts::config::Value;
 #define PN "ssl-cert-loader"
 #define PCP "[" PN " Plugin] "
 
-#if TS_USE_TLS_SNI
-
 namespace
 {
 class CertLookup
@@ -258,7 +256,6 @@ int Parse_order = 0;
 void
 Parse_Config(Value &parent, ParsedSslValues &orig_values)
 {
-  bool inserted = false;
   ParsedSslValues cur_values(orig_values);
   Value val = parent.find("ssl-key-name");
 
@@ -297,32 +294,40 @@ Parse_Config(Value &parent, ParsedSslValues &orig_values)
     std::deque<std::string> cert_names;
     SslEntry *entry = Load_Certificate_Entry(cur_values, cert_names);
 
-    // Store in appropriate table
-    if (cur_values.server_name.length() > 0) {
-      Lookup.tree.insert(cur_values.server_name, entry, Parse_order++);
-      inserted = true;
-    }
-    if (cur_values.server_ips.size() > 0) {
-      for (auto &server_ip : cur_values.server_ips) {
-        IpEndpoint first, second;
-        first.assign(server_ip.first);
-        second.assign(server_ip.second);
-        Lookup.ipmap.fill(&first, &second, entry);
-        char val1[256], val2[256];
-        server_ip.first.toString(val1, sizeof(val1));
-        server_ip.second.toString(val2, sizeof(val2));
+    if (entry) {
+      bool inserted = false;
+
+      // Store in appropriate table
+      if (cur_values.server_name.length() > 0) {
+        Lookup.tree.insert(cur_values.server_name, entry, Parse_order++);
         inserted = true;
       }
-    }
-    if (entry != nullptr) {
+      if (cur_values.server_ips.size() > 0) {
+        for (auto &server_ip : cur_values.server_ips) {
+          IpEndpoint first, second;
+          first.assign(server_ip.first);
+          second.assign(server_ip.second);
+          Lookup.ipmap.fill(&first, &second, entry);
+          char val1[256], val2[256];
+          server_ip.first.toString(val1, sizeof(val1));
+          server_ip.second.toString(val2, sizeof(val2));
+          inserted = true;
+        }
+      }
+
       if (cert_names.size() > 0) {
         for (const auto &cert_name : cert_names) {
           Lookup.tree.insert(cert_name, entry, Parse_order++);
+          inserted = true;
         }
-      } else if (!inserted) {
+      }
+
+      if (!inserted) {
         delete entry;
         TSError(PCP "cert_names is empty and entry not otherwise inserted!");
       }
+    } else {
+      TSError(PCP "failed to load the certificate entry");
     }
   }
 }
@@ -547,13 +552,3 @@ TSPluginInit(int argc, const char *argv[])
 
   return;
 }
-
-#else // ! TS_USE_TLS_SNI
-
-void
-TSPluginInit(int, const char *[])
-{
-  TSError(PCP "requires TLS SNI which is not available");
-}
-
-#endif // TS_USE_TLS_SNI

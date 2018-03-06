@@ -71,19 +71,12 @@ ts.Disk.ssl_multicert_config.AddLine(
 via_log_id = Test.Disk.File("via.log")
 via_log_id.Content = "via.gold"
 
-# Ask the OS if the port is ready for connect()
-
-
-def CheckPort(Port):
-    return lambda: 0 == subprocess.call('netstat --listen --tcp -n | grep -q :{}'.format(Port), shell=True)
-
-
 # Basic HTTP 1.1
 tr = Test.AddTestRun()
 # Wait for the micro server
-tr.Processes.Default.StartBefore(server, ready=CheckPort(server.Variables.Port))
+tr.Processes.Default.StartBefore(server, ready=When.PortOpen(server.Variables.Port))
 # Delay on readiness of our ssl ports
-tr.Processes.Default.StartBefore(Test.Processes.ts, ready=CheckPort(ts.Variables.ssl_port))
+tr.Processes.Default.StartBefore(Test.Processes.ts, ready=When.PortOpen(ts.Variables.ssl_port))
 
 tr.Processes.Default.Command = 'curl --verbose --ipv4 --http1.1 --proxy localhost:{} http://www.example.com'.format(
     ts.Variables.port)

@@ -98,7 +98,7 @@ void
 setupTransactionManagement()
 {
   // Reserve a transaction slot
-  TSAssert(TS_SUCCESS == TSHttpArgIndexReserve("atscppapi", "ATS CPP API", &TRANSACTION_STORAGE_INDEX));
+  TSAssert(TS_SUCCESS == TSHttpTxnArgIndexReserve("atscppapi", "ATS CPP API", &TRANSACTION_STORAGE_INDEX));
   // We must always have a cleanup handler available
   TSMutex mutex = nullptr;
   TSCont cont   = TSContCreate(handleTransactionEvents, mutex);
@@ -141,10 +141,6 @@ void inline invokePluginForEvent(Plugin *plugin, TSHttpTxn ats_txn_handle, TSEve
   case TS_EVENT_HTTP_CACHE_LOOKUP_COMPLETE:
     plugin->handleReadCacheLookupComplete(transaction);
     break;
-  case TS_EVENT_HTTP_SELECT_ALT:
-    plugin->handleSelectAlt(transaction);
-    break;
-
   default:
     assert(false); /* we should never get here */
     break;
@@ -230,6 +226,27 @@ void
 utils::internal::invokePluginForEvent(GlobalPlugin *plugin, TSHttpTxn ats_txn_handle, TSEvent event)
 {
   ::invokePluginForEvent(static_cast<Plugin *>(plugin), ats_txn_handle, event);
+}
+
+void
+utils::internal::invokePluginForEvent(GlobalPlugin *plugin, TSHttpAltInfo altinfo_handle, TSEvent event)
+{
+  TSMBuffer hdr_buf;
+  TSMLoc hdr_loc;
+
+  assert(event == TS_EVENT_HTTP_SELECT_ALT);
+
+  TSHttpAltInfoClientReqGet(altinfo_handle, &hdr_buf, &hdr_loc);
+  const Request clientReq(hdr_buf, hdr_loc); // no MLocRelease needed
+
+  TSHttpAltInfoCachedReqGet(altinfo_handle, &hdr_buf, &hdr_loc);
+  const Request cachedReq(hdr_buf, hdr_loc); // no MLocRelease needed
+
+  TSHttpAltInfoCachedRespGet(altinfo_handle, &hdr_buf, &hdr_loc);
+  Response cachedResp;
+  cachedResp.init(hdr_buf, hdr_loc); // no MLocRelease needed
+
+  plugin->handleSelectAlt(clientReq, cachedReq, cachedResp);
 }
 
 std::string

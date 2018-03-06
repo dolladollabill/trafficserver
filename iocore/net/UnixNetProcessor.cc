@@ -30,7 +30,6 @@
 #include "StatPages.h"
 
 int net_accept_number = 0;
-extern std::vector<NetAccept *> naVec;
 NetProcessor::AcceptOptions const NetProcessor::DEFAULT_ACCEPT_OPTIONS;
 
 NetProcessor::AcceptOptions &
@@ -150,11 +149,12 @@ UnixNetProcessor::accept_internal(Continuation *cont, int fd, AcceptOptions cons
           NetAccept *a = na->clone();
           snprintf(thr_name, MAX_THREAD_NAME_LENGTH, "[ACCEPT %d:%d]", i - 1, ats_ip_port_host_order(&accept_ip));
           a->init_accept_loop(thr_name);
-          Debug("iocore_net_accept", "Created accept thread #%d for port %d", i, ats_ip_port_host_order(&accept_ip));
+          Debug("iocore_net_accept_start", "Created accept thread #%d for port %d", i, ats_ip_port_host_order(&accept_ip));
         }
 
         // Start the "template" accept thread last.
-        Debug("iocore_net_accept", "Created accept thread #%d for port %d", accept_threads, ats_ip_port_host_order(&accept_ip));
+        Debug("iocore_net_accept_start", "Created accept thread #%d for port %d", accept_threads,
+              ats_ip_port_host_order(&accept_ip));
         snprintf(thr_name, MAX_THREAD_NAME_LENGTH, "[ACCEPT %d:%d]", accept_threads - 1, ats_ip_port_host_order(&accept_ip));
         na->init_accept_loop(thr_name);
 #if !TS_USE_POSIX_CAP
@@ -173,7 +173,12 @@ UnixNetProcessor::accept_internal(Continuation *cont, int fd, AcceptOptions cons
   } else {
     na->init_accept(nullptr);
   }
-  naVec.push_back(na);
+
+  {
+    SCOPED_MUTEX_LOCK(lock, naVecMutex, this_ethread());
+    naVec.push_back(na);
+  }
+
 #ifdef TCP_DEFER_ACCEPT
   // set tcp defer accept timeout if it is configured, this will not trigger an accept until there is
   // data on the socket ready to be read
@@ -194,6 +199,14 @@ UnixNetProcessor::accept_internal(Continuation *cont, int fd, AcceptOptions cons
 #endif
 
   return na->action_.get();
+}
+
+void
+NetProcessor::stop_accept()
+{
+  for (auto na = naVec.begin(); na != naVec.end(); ++na) {
+    (*na)->stop_accept();
+  }
 }
 
 Action *
@@ -418,6 +431,10 @@ UnixNetProcessor::init()
   if (0 == accept_mss)
     REC_ReadConfigInteger(accept_mss, "proxy.config.net.sock_mss_in");
 
+  // NetHandler - do the global configuration initialization and then
+  // schedule per thread start up logic. Global init is done only here.
+  NetHandler::init_for_process();
+  NetHandler::active_thread_types[ET_NET] = true;
   eventProcessor.schedule_spawn(&initialize_thread_for_net, etype);
 
   RecData d;

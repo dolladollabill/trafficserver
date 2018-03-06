@@ -21,6 +21,7 @@ import http.client
 import socket
 import ssl
 import pprint
+# import gevent
 import requests
 import os
 #import threading
@@ -29,6 +30,7 @@ from multiprocessing import current_process
 import sessionvalidation.sessionvalidation as sv
 import lib.result as result
 import extractHeader
+# from gevent import monkey, sleep
 from threading import Thread
 import mainProcess
 import json
@@ -125,36 +127,50 @@ def txn_replay(session_filename, txn, proxy, result_queue, request_session):
             nBytes = int(txn_req_headers_dict['Content-Length'])
             body = createDummyBodywithLength(nBytes)
         #print("request session is",id(request_session))
+        
+        # NOTE: request_session here is actually python's HTTPSConnection, which is different from that in NonSSL, which uses the requests library -_-
         if method == 'GET':
-            request_session.request('GET', 'https://' + extractHeader.extract_host(txn_req_headers) + extractHeader.extract_GET_path(txn_req_headers),
-                                    headers=txn_req_headers_dict, body=body)
+            request_session.request('GET', extractHeader.extract_GET_path(
+                txn_req_headers), headers=txn_req_headers_dict, body=body)
             r1 = request_session.getresponse()
-            responseHeaders = r1.getheaders()
-            responseContent = r1.read()
+            responseContent = r1.read()  # byte array
 
         elif method == 'POST':
-            request_session.request('POST', 'https://' + extractHeader.extract_host(txn_req_headers) + extractHeader.extract_GET_path(txn_req_headers),
-                                    headers=txn_req_headers_dict, body=body)
+            request_session.request('POST', extractHeader.extract_GET_path(
+                txn_req_headers), headers=txn_req_headers_dict, body=body)
             r1 = request_session.getresponse()
-            responseHeaders = r1.getheaders()
             responseContent = r1.read()
 
         elif method == 'HEAD':
-            request_session.request('HEAD', 'https://' + extractHeader.extract_host(txn_req_headers) + extractHeader.extract_GET_path(txn_req_headers),
-                                    headers=txn_req_headers_dict, body=body)
+            request_session.request('HEAD', extractHeader.extract_GET_path(
+                txn_req_headers), headers=txn_req_headers_dict, body=body)
             r1 = request_session.getresponse()
-            responseHeaders = r1.getheaders()
             responseContent = r1.read()
-        for key, value in responseHeaders:
-            responseDict[key.lower()] = value
+        else:   # EXPERIMENTAL
+            request_session.request(method, extractHeader.extract_GET_path(
+                txn_req_headers), headers=txn_req_headers_dict, body=body)
+            r1 = request_session.getresponse()
+            responseContent = r1.read()
+
+        responseHeaders = extractHeader.responseHeaderTuple_to_dict(r1.getheaders())
         expected = extractHeader.responseHeader_to_dict(resp.getHeaders())
-        # print(responseDict)
+        # print("------------EXPECTED-----------")
+        # print(expected)
+        # print("------------RESP--------------")
+        # print(responseHeaders)
+        # print()
         if mainProcess.verbose:
             expected_output_split = resp.getHeaders().split('\r\n')[0].split(' ', 2)
             expected_output = (int(expected_output_split[1]), str(expected_output_split[2]))
-            r = result.Result(session_filename, expected_output[0], r1.status)
-            print(r.getResultString(responseDict, expected, colorize=True))
-            r.Compare(responseDict, expected)
+            r = result.Result(session_filename, expected_output[0], r1.status, responseContent)
+            b_res, res = r.getResult(responseHeaders, expected, colorize=True)
+            print(res)
+
+            if not res:
+                print("Received response")
+                print(responseHeaders)
+                print("Expected response")
+                print(expected)
         # result_queue.put(r)
     except UnicodeEncodeError as e:
         # these unicode errors are due to the interaction between Requests and our wiretrace data.
@@ -165,7 +181,7 @@ def txn_replay(session_filename, txn, proxy, result_queue, request_session):
         print("ContentDecodingError", e)
     except:
         e = sys.exc_info()
-        print("ERROR in requests: ", e, response, session_filename)
+        print("ERROR in SSLReplay: ", e, response, session_filename)
 
 
 def client_replay(input, proxy, result_queue, nThread):
@@ -195,8 +211,7 @@ def session_replay(input, proxy, result_queue):
             txn_req_headers = req.getHeaders()
             txn_req_headers_dict = extractHeader.header_to_dict(txn_req_headers)
             sc = ssl.SSLContext(protocol=ssl.PROTOCOL_SSLv23)
-            if Config.ca_certs != None and Config.keyfile != None:
-                sc.load_cert_chain(Config.ca_certs, keyfile=Config.keyfile)
+            sc.load_cert_chain(Config.ca_certs, keyfile=Config.keyfile)
             conn = ProxyHTTPSConnection(Config.proxy_host, Config.proxy_ssl_port, cert_file=Config.ca_certs,
                                         key_file=Config.keyfile, context=sc, server_name=txn_req_headers_dict['Host'])
             for txn in session.getTransactionIter():
@@ -209,7 +224,7 @@ def session_replay(input, proxy, result_queue):
             #sslSocket.bStop = False
 
         bSTOP = True
-        #print("stopping now")
+        print("stopping now")
         input.put('STOP')
         break
 

@@ -76,6 +76,7 @@ extern "C" int plock(int);
 #include "ProxyConfig.h"
 #include "HttpProxyServerMain.h"
 #include "HttpBodyFactory.h"
+#include "ProxyClientSession.h"
 #include "logging/Log.h"
 #include "CacheControl.h"
 #include "IPAllow.h"
@@ -87,11 +88,12 @@ extern "C" int plock(int);
 #include "Plugin.h"
 #include "DiagsConfig.h"
 #include "CoreUtils.h"
-#include "congest/Congestion.h"
 #include "RemapProcessor.h"
 #include "I_Tasks.h"
 #include "InkAPIInternal.h"
 #include "HTTP2.h"
+#include "ts/ink_config.h"
+#include "P_SSLSNI.h"
 
 #include <ts/ink_cap.h>
 
@@ -126,9 +128,11 @@ static void *mgmt_lifecycle_msg_callback(void *x, char *data, int len);
 static void init_ssl_ctx_callback(void *ctx, bool server);
 static void load_ssl_file_callback(const char *ssl_file, unsigned int options);
 
-static int num_of_net_threads = ink_number_of_processors();
+// We need these two to be accessible somewhere else now
+int num_of_net_threads = ink_number_of_processors();
+int num_accept_threads = 0;
+
 static int num_of_udp_threads = 0;
-static int num_accept_threads = 0;
 static int num_task_threads   = 0;
 
 static char *http_accept_port_descriptor;
@@ -276,10 +280,16 @@ public:
       signal_received[SIGINT]  = false;
 
       RecInt timeout = 0;
-      REC_ReadConfigInteger(timeout, "proxy.config.stop.shutdown_timeout");
-
-      if (timeout) {
-        http2_drain = true;
+      if (RecGetRecordInt("proxy.config.stop.shutdown_timeout", &timeout) == REC_ERR_OKAY && timeout &&
+          !http_client_session_draining) {
+        http_client_session_draining = true;
+        if (!remote_management_flag) {
+          // Close listening sockets here only if TS is running standalone
+          RecInt close_sockets = 0;
+          if (RecGetRecordInt("proxy.config.restart.stop_listening", &close_sockets) == REC_ERR_OKAY && close_sockets) {
+            stop_HttpProxyServer();
+          }
+        }
       }
 
       Debug("server", "received exit signal, shutting down in %" PRId64 "secs", timeout);
@@ -431,6 +441,23 @@ private:
   struct rusage _usage;
 };
 
+void
+set_debug_ip(const char *ip_string)
+{
+  if (ip_string)
+    diags->debug_client_ip.load(ip_string);
+  else
+    diags->debug_client_ip.invalidate();
+}
+
+static int
+update_debug_client_ip(const char * /*name ATS_UNUSED */, RecDataT /* data_type ATS_UNUSED */, RecData data,
+                       void * /* data_type ATS_UNUSED */)
+{
+  set_debug_ip(data.rec_string);
+  return 0;
+}
+
 static int
 init_memory_tracker(const char *config_var, RecDataT /* type ATS_UNUSED */, RecData data, void * /* cookie ATS_UNUSED */)
 {
@@ -508,7 +535,7 @@ init_system()
   //
   // Delimit file Descriptors
   //
-  fds_limit = ink_max_out_rlimit(RLIMIT_NOFILE, true, false);
+  fds_limit = ink_max_out_rlimit(RLIMIT_NOFILE);
 }
 
 static void
@@ -662,6 +689,7 @@ CB_After_Cache_Init()
 
   start = ink_atomic_swap(&delay_listen_for_cache_p, -1);
 
+#ifndef TS_ENABLE_FIPS
   // Check for cache BC after the cache is initialized and before listen, if possible.
   if (cacheProcessor.min_stripe_version.ink_major < CACHE_DB_MAJOR_VERSION) {
     // Versions before 23 need the MMH hash.
@@ -671,6 +699,7 @@ CB_After_Cache_Init()
       URLHashContext::Setting = URLHashContext::MMH;
     }
   }
+#endif
 
   if (1 == start) {
     Debug("http_listen", "Delayed listen enable, cache initialization finished");
@@ -1121,12 +1150,12 @@ adjust_sys_settings()
     }
   }
 
-  ink_max_out_rlimit(RLIMIT_STACK, true, true);
-  ink_max_out_rlimit(RLIMIT_DATA, true, true);
-  ink_max_out_rlimit(RLIMIT_FSIZE, true, false);
+  ink_max_out_rlimit(RLIMIT_STACK);
+  ink_max_out_rlimit(RLIMIT_DATA);
+  ink_max_out_rlimit(RLIMIT_FSIZE);
 
 #ifdef RLIMIT_RSS
-  ink_max_out_rlimit(RLIMIT_RSS, true, true);
+  ink_max_out_rlimit(RLIMIT_RSS);
 #endif
 }
 
@@ -1691,7 +1720,7 @@ main(int /* argc ATS_UNUSED */, const char **argv)
   // We need to do this early so we can initialize the Machine
   // singleton, which depends on configuration values loaded in this.
   // We want to initialize Machine as early as possible because it
-  // has other dependencies. Hopefully not in init_HttpProxyServer().
+  // has other dependencies. Hopefully not in prep_HttpProxyServer().
   HttpConfig::startup();
   /* Set up the machine with the outbound address if that's set,
      or the inbound address if set, otherwise let it default.
@@ -1766,9 +1795,21 @@ main(int /* argc ATS_UNUSED */, const char **argv)
   ink_dns_init(makeModuleVersion(HOSTDB_MODULE_MAJOR_VERSION, HOSTDB_MODULE_MINOR_VERSION, PRIVATE_MODULE_HEADER));
   ink_split_dns_init(makeModuleVersion(1, 0, PRIVATE_MODULE_HEADER));
 
+  naVecMutex             = new_ProxyMutex();
+  started_et_net_threads = 0;
+
   // Do the inits for NetProcessors that use ET_NET threads. MUST be before starting those threads.
   netProcessor.init();
-  init_HttpProxyServer();
+  prep_HttpProxyServer();
+
+  if (num_accept_threads == 0) {
+    eventProcessor.schedule_spawn(&init_HttpProxyServer, ET_NET);
+  } else {
+    std::unique_lock<std::mutex> lock(proxyServerMutex);
+    et_net_threads_ready = true;
+    lock.unlock();
+    proxyServerCheck.notify_one();
+  }
 
   // !! ET_NET threads start here !!
   // This means any spawn scheduling must be done before this point.
@@ -1791,6 +1832,13 @@ main(int /* argc ATS_UNUSED */, const char **argv)
   REC_RegisterConfigUpdateFunc("proxy.config.dump_mem_info_frequency", init_memory_tracker, nullptr);
   init_memory_tracker(nullptr, RECD_NULL, RecData(), nullptr);
 
+  char *p = REC_ConfigReadString("proxy.config.diags.debug.client_ip");
+  if (p) {
+    // Translate string to IpAddr
+    set_debug_ip(p);
+  }
+  REC_RegisterConfigUpdateFunc("proxy.config.diags.debug.client_ip", update_debug_client_ip, NULL);
+
   // log initialization moved down
 
   if (command_flag) {
@@ -1807,7 +1855,6 @@ main(int /* argc ATS_UNUSED */, const char **argv)
     remapProcessor.start(num_remap_threads, stacksize);
     RecProcessStart();
     initCacheControl();
-    initCongestionControl();
     IpAllow::startup();
     ParentConfig::startup();
 #ifdef SPLIT_DNS
@@ -1901,10 +1948,14 @@ main(int /* argc ATS_UNUSED */, const char **argv)
       if (delay_p && ink_atomic_cas(&delay_listen_for_cache_p, 0, 1)) {
         Debug("http_listen", "Delaying listen, waiting for cache initialization");
       } else {
+        // Use a condition variable to check if we are ready to call
+        // start_HttpProxyServer() when num_accept_threads is set to 0.
+        std::unique_lock<std::mutex> lock(proxyServerMutex);
+        proxyServerCheck.wait(lock, [] { return et_net_threads_ready; });
         start_HttpProxyServer(); // PORTS_READY_HOOK called from in here
       }
     }
-
+    SNIConfig::cloneProtoSet();
     // Plugins can register their own configuration names so now after they've done that
     // check for unexpected names. This is very late because remap plugins must be allowed to
     // fire up as well.
@@ -1912,12 +1963,6 @@ main(int /* argc ATS_UNUSED */, const char **argv)
 
     // "Task" processor, possibly with its own set of task threads
     tasksProcessor.start(num_task_threads, stacksize);
-
-    int back_door_port = NO_FD;
-    REC_ReadConfigInteger(back_door_port, "proxy.config.process_manager.mgmt_port");
-    if (back_door_port != NO_FD) {
-      start_HttpProxyServerBackDoor(back_door_port, num_accept_threads > 0 ? 1 : 0); // One accept thread is enough
-    }
 
     if (netProcessor.socks_conf_stuff->accept_enabled) {
       start_SocksProxy(netProcessor.socks_conf_stuff->accept_port);

@@ -31,10 +31,12 @@
 #include "InkAPIInternal.h"
 #include "http/HttpServerSession.h"
 
+extern bool http_client_session_draining;
+
 // Emit a debug message conditional on whether this particular client session
 // has debugging enabled. This should only be called from within a client session
 // member function.
-#define DebugSsn(ssn, tag, ...) DebugSpecific((ssn)->debug(), tag, __VA_ARGS__)
+#define SsnDebug(ssn, tag, ...) SpecificDebug((ssn)->debug(), tag, __VA_ARGS__)
 
 class ProxyClientTransaction;
 struct AclRecord;
@@ -120,12 +122,24 @@ public:
     return m_active;
   }
 
+  bool
+  is_draining() const
+  {
+    return http_client_session_draining;
+  }
+
   // Initiate an API hook invocation.
   void do_api_callout(TSHttpHookID id);
 
   // Override if your session protocol allows this.
   virtual bool
   is_transparent_passthrough_allowed() const
+  {
+    return false;
+  }
+
+  virtual bool
+  is_chunked_encoding_supported() const
   {
     return false;
   }
@@ -254,7 +268,7 @@ private:
   TSHttpHookID api_hookid = TS_HTTP_READ_REQUEST_HDR_HOOK;
   APIHook *api_current    = nullptr;
   HttpAPIHooks api_hooks;
-  void *user_args[HTTP_SSN_TXN_MAX_USER_ARG];
+  void *user_args[TS_HTTP_MAX_USER_ARG];
 
   // for DI. An active connection is one that a request has
   // been successfully parsed (PARSE_DONE) and it remains to

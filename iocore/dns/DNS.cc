@@ -226,7 +226,8 @@ DNSProcessor::start(int, size_t stacksize)
 
   if (dns_thread > 0) {
     // TODO: Hmmm, should we just get a single thread some other way?
-    ET_DNS = eventProcessor.register_event_type("ET_DNS");
+    ET_DNS                                  = eventProcessor.register_event_type("ET_DNS");
+    NetHandler::active_thread_types[ET_DNS] = true;
     eventProcessor.schedule_spawn(&initialize_thread_for_net, ET_DNS);
     eventProcessor.spawn_event_threads(ET_DNS, 1, stacksize);
   } else {
@@ -483,7 +484,6 @@ DNSHandler::open_con(sockaddr const *target, bool failed, int icon, bool over_tc
   Debug("dns", "open_con: opening connection %s", ats_ip_nptop(target, ip_text, sizeof ip_text));
 
   if (cur_con.fd != NO_FD) { // Remove old FD from epoll fd
-    cur_con.eio.stop();
     cur_con.close();
   }
 
@@ -568,7 +568,7 @@ DNSHandler::startEvent(int /* event ATS_UNUSED */, Event *e)
       open_cons(nullptr); // use current target address.
       n_con = 1;
     }
-    e->ethread->schedule_every(this, DNS_PERIOD);
+    e->ethread->schedule_every(this, -DNS_PERIOD);
 
     return EVENT_CONT;
   } else {
@@ -591,16 +591,15 @@ DNSHandler::startEvent_sdns(int /* event ATS_UNUSED */, Event *e)
   open_cons(&ip.sa, false, n_con);
   ++n_con; // TODO should n_con be zeroed?
 
-  e->schedule_every(DNS_PERIOD);
+  e->schedule_every(-DNS_PERIOD);
   return EVENT_CONT;
 }
 
 static inline int
-_ink_res_mkquery(ink_res_state res, char *qname, int qtype, char *buffer, bool over_tcp = false)
+_ink_res_mkquery(ink_res_state res, char *qname, int qtype, unsigned char *buffer, bool over_tcp = false)
 {
   int offset = over_tcp ? tcp_data_length_offset : 0;
-  int r =
-    ink_res_mkquery(res, QUERY, qname, C_IN, qtype, nullptr, 0, nullptr, (unsigned char *)buffer + offset, MAX_DNS_PACKET_LEN);
+  int r      = ink_res_mkquery(res, QUERY, qname, C_IN, qtype, nullptr, 0, nullptr, buffer + offset, MAX_DNS_PACKET_LEN);
   if (over_tcp) {
     NS_PUT16(r, buffer);
   }
@@ -632,7 +631,7 @@ DNSHandler::retry_named(int ndx, ink_hrtime t, bool reopen)
   }
   bool over_tcp = dns_conn_mode == DNS_CONN_MODE::TCP_ONLY;
   int con_fd    = over_tcp ? tcpcon[ndx].fd : udpcon[ndx].fd;
-  char buffer[MAX_DNS_PACKET_LEN];
+  unsigned char buffer[MAX_DNS_PACKET_LEN];
   Debug("dns", "trying to resolve '%s' from DNS connection, ndx %d", try_server_names[try_servers], ndx);
   int r       = _ink_res_mkquery(m_res, try_server_names[try_servers], T_A, buffer, over_tcp);
   try_servers = (try_servers + 1) % countof(try_server_names);
@@ -653,7 +652,7 @@ DNSHandler::try_primary_named(bool reopen)
     open_cons(&ip.sa, true, 0);
   }
   if ((t - last_primary_retry) > DNS_PRIMARY_RETRY_PERIOD) {
-    char buffer[MAX_DNS_PACKET_LEN];
+    unsigned char buffer[MAX_DNS_PACKET_LEN];
     bool over_tcp      = dns_conn_mode == DNS_CONN_MODE::TCP_ONLY;
     int con_fd         = over_tcp ? tcpcon[0].fd : udpcon[0].fd;
     last_primary_retry = t;
@@ -720,6 +719,12 @@ DNSHandler::failover()
     }
     switch_named(name_server);
   } else {
+    if (dns_conn_mode != DNS_CONN_MODE::TCP_ONLY) {
+      udpcon[0].close();
+    }
+    if (dns_conn_mode != DNS_CONN_MODE::UDP_ONLY) {
+      tcpcon[0].close();
+    }
     ip_text_buffer buff;
     Warning("failover: connection to DNS server %s lost, retrying", ats_ip_ntop(&ip.sa, buff, sizeof(buff)));
   }
@@ -803,6 +808,15 @@ DNSHandler::recv_dns(int /* event ATS_UNUSED */, Event * /* e ATS_UNUSED */)
           dnsc->tcp_data.buf_ptr = make_ptr(dnsBufAllocator.alloc());
         }
         if (dnsc->tcp_data.total_length == 0) {
+          // see if TS gets a two-byte size
+          uint16_t tmp = 0;
+          res          = socketManager.recv(dnsc->fd, &tmp, sizeof(tmp), MSG_PEEK);
+          if (res == -EAGAIN || res == 0 || res == 1) {
+            break;
+          }
+          if (res < 0) {
+            goto Lerror;
+          }
           // reading total size
           res = socketManager.recv(dnsc->fd, &(dnsc->tcp_data.total_length), sizeof(dnsc->tcp_data.total_length), 0);
           if (res == -EAGAIN) {
@@ -819,10 +833,10 @@ DNSHandler::recv_dns(int /* event ATS_UNUSED */, Event * /* e ATS_UNUSED */)
         // continue reading data
         void *buf_start = (char *)dnsc->tcp_data.buf_ptr->buf + dnsc->tcp_data.done_reading;
         res             = socketManager.recv(dnsc->fd, buf_start, dnsc->tcp_data.total_length - dnsc->tcp_data.done_reading, 0);
-        if (res == -EAGAIN) {
+        if (res == -EAGAIN || res == 0) {
           break;
         }
-        if (res <= 0) {
+        if (res < 0) {
           goto Lerror;
         }
         Debug("dns", "received packet size = %d over TCP", res);
@@ -1076,7 +1090,7 @@ static bool
 write_dns_event(DNSHandler *h, DNSEntry *e, bool over_tcp)
 {
   ProxyMutex *mutex = h->mutex.get();
-  char buffer[MAX_DNS_PACKET_LEN];
+  unsigned char buffer[MAX_DNS_PACKET_LEN];
   int offset     = over_tcp ? tcp_data_length_offset : 0;
   HEADER *header = (HEADER *)(buffer + offset);
   int r          = 0;
@@ -1364,7 +1378,7 @@ Lretry:
   if (e->timeout) {
     e->timeout->cancel();
   }
-  e->timeout = h->mutex->thread_holding->schedule_in(e, DNS_PERIOD);
+  e->timeout = h->mutex->thread_holding->schedule_in(e, MUTEX_RETRY_DELAY);
 }
 
 int
@@ -1595,7 +1609,7 @@ dns_process(DNSHandler *handler, HostEnt *buf, int len)
       //
       // Decode cname
       //
-      if (is_addr_query(e->qtype) && (type == T_CNAME || type == T_DNAME)) {
+      if ((is_addr_query(e->qtype) || e->qtype == T_SRV) && (type == T_CNAME || type == T_DNAME)) {
         if (ap >= &buf->host_aliases[DNS_MAX_ALIASES - 1]) {
           continue;
         }

@@ -78,7 +78,11 @@ EThread::schedule_every(Continuation *cont, ink_hrtime t, int callback_event, vo
   Event *e          = ::eventAllocator.alloc();
   e->callback_event = callback_event;
   e->cookie         = cookie;
-  return schedule(e->init(cont, get_hrtime() + t, t));
+  if (t < 0) {
+    return schedule(e->init(cont, t, t));
+  } else {
+    return schedule(e->init(cont, get_hrtime() + t, t));
+  }
 }
 
 TS_INLINE Event *
@@ -128,7 +132,11 @@ EThread::schedule_every_local(Continuation *cont, ink_hrtime t, int callback_eve
   Event *e          = EVENT_ALLOC(eventAllocator, this);
   e->callback_event = callback_event;
   e->cookie         = cookie;
-  return schedule_local(e->init(cont, get_hrtime() + t, t));
+  if (t < 0) {
+    return schedule(e->init(cont, t, t));
+  } else {
+    return schedule(e->init(cont, get_hrtime() + t, t));
+  }
 }
 
 TS_INLINE Event *
@@ -176,6 +184,12 @@ EThread::free_event(Event *e)
   ink_assert(!e->in_the_priority_queue && !e->in_the_prot_queue);
   e->mutex = nullptr;
   EVENT_FREE(e, eventAllocator, this);
+}
+
+TS_INLINE void
+EThread::set_tail_handler(LoopTailHandler *handler)
+{
+  ink_atomic_swap(&tail_cb, handler);
 }
 
 #endif /*_EThread_h_*/

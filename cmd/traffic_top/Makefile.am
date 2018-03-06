@@ -24,10 +24,12 @@ AM_CPPFLAGS += \
   -I$(abs_top_srcdir)/lib/records \
   -I$(abs_top_srcdir)/mgmt \
   -I$(abs_top_srcdir)/mgmt/api/include \
+  $(TS_INCLUDES) \
   @CURL_CFLAGS@ \
   @CURSES_CFLAGS@
 
 AM_LDFLAGS += \
+  @CURSES_LDFLAGS@ \
   @OPENSSL_LDFLAGS@
 
 bin_PROGRAMS = traffic_top

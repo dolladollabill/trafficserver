@@ -30,7 +30,8 @@ AM_CPPFLAGS += \
   -I$(abs_top_srcdir)/mgmt/api \
   -I$(abs_top_srcdir)/mgmt/api/include \
   -I$(abs_top_srcdir)/mgmt/utils \
-  -I$(abs_top_srcdir)/lib
+  -I$(abs_top_srcdir)/lib \
+  $(TS_INCLUDES)
 
 if BUILD_LUAJIT
 AM_CPPFLAGS += \
@@ -51,9 +52,9 @@ traffic_manager_LDADD = \
   $(top_builddir)/mgmt/api/libmgmtapilocal.la \
   $(top_builddir)/mgmt/libmgmt_lm.la \
   $(top_builddir)/proxy/hdrs/libhdrs.a \
-  $(top_builddir)/lib/records/librecords_lm.a \
   $(top_builddir)/lib/ts/libtsutil.la \
   $(top_builddir)/iocore/eventsystem/libinkevent.a \
+  $(top_builddir)/lib/records/librecords_lm.a \
   $(top_builddir)/proxy/shared/libdiagsconfig.a
 
 AM_LDFLAGS += \

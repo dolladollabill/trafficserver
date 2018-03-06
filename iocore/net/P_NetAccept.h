@@ -39,6 +39,7 @@
 #ifndef __P_NETACCEPT_H__
 #define __P_NETACCEPT_H__
 
+#include <vector>
 #include "ts/ink_platform.h"
 #include "P_Connection.h"
 
@@ -98,6 +99,7 @@ struct NetAccept : public Continuation {
   void init_accept_loop(const char *);
   virtual void init_accept(EThread *t = nullptr);
   virtual void init_accept_per_thread();
+  virtual void stop_accept();
   virtual NetAccept *clone() const;
 
   // 0 == success
@@ -112,5 +114,8 @@ struct NetAccept : public Continuation {
   explicit NetAccept(const NetProcessor::AcceptOptions &);
   virtual ~NetAccept() { action_ = nullptr; }
 };
+
+extern Ptr<ProxyMutex> naVecMutex;
+extern std::vector<NetAccept *> naVec;
 
 #endif

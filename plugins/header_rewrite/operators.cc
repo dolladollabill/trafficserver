@@ -26,6 +26,7 @@
 
 #include "operators.h"
 #include "expander.h"
+#include "../../lib/ts/apidefs.h"
 
 // OperatorConfig
 void
@@ -279,10 +280,9 @@ OperatorSetRedirect::initialize(Parser &p)
 
   _status.set_value(p.get_arg());
   _location.set_value(p.get_value());
-
-  if ((_status.get_int_value() != (int)TS_HTTP_STATUS_MOVED_PERMANENTLY) &&
-      (_status.get_int_value() != (int)TS_HTTP_STATUS_MOVED_TEMPORARILY)) {
-    TSError("[%s] unsupported redirect status %d", PLUGIN_NAME, _status.get_int_value());
+  auto status = _status.get_int_value();
+  if (status < 300 || status > 399 || status == TS_HTTP_STATUS_NOT_MODIFIED) {
+    TSError("[%s] unsupported redirect status %d", PLUGIN_NAME, status);
   }
 
   require_resources(RSRC_SERVER_RESPONSE_HEADERS);
@@ -692,10 +692,15 @@ OperatorRMCookie::exec(const Resources &res) const
     int cookies_len     = 0;
     const char *cookies = TSMimeHdrFieldValueStringGet(res.bufp, res.hdr_loc, field_loc, -1, &cookies_len);
     std::string updated_cookie;
-    if (CookieHelper::cookieModifyHelper(cookies, cookies_len, updated_cookie, CookieHelper::COOKIE_OP_DEL, _cookie) &&
-        TS_SUCCESS ==
-          TSMimeHdrFieldValueStringSet(res.bufp, res.hdr_loc, field_loc, -1, updated_cookie.c_str(), updated_cookie.size())) {
-      TSDebug(PLUGIN_NAME, "OperatorRMCookie::exec, updated_cookie = [%s]", updated_cookie.c_str());
+    if (CookieHelper::cookieModifyHelper(cookies, cookies_len, updated_cookie, CookieHelper::COOKIE_OP_DEL, _cookie)) {
+      if (updated_cookie.empty()) {
+        if (TS_SUCCESS == TSMimeHdrFieldDestroy(res.bufp, res.hdr_loc, field_loc)) {
+          TSDebug(PLUGIN_NAME, "OperatorRMCookie::exec, empty cookie deleted");
+        }
+      } else if (TS_SUCCESS == TSMimeHdrFieldValueStringSet(res.bufp, res.hdr_loc, field_loc, -1, updated_cookie.c_str(),
+                                                            updated_cookie.size())) {
+        TSDebug(PLUGIN_NAME, "OperatorRMCookie::exec, updated_cookie = [%s]", updated_cookie.c_str());
+      }
     }
     TSHandleMLocRelease(res.bufp, res.hdr_loc, field_loc);
   }
@@ -837,6 +842,11 @@ CookieHelper::cookieModifyHelper(const char *cookies, const size_t cookies_len, 
         for (; idx < cookies_len && cookies[idx] != ';'; idx++) {
           ;
         }
+        // If we have not reached the end and there is a space after the
+        // semi-colon, advance one char
+        if (idx + 1 < cookies_len && std::isspace(cookies[idx + 1])) {
+          idx++;
+        }
         // cookie value is found
         size_t value_end_idx = idx;
         if (CookieHelper::COOKIE_OP_SET == cookie_op) {
@@ -926,6 +936,7 @@ void
 OperatorSetDebug::initialize_hooks()
 {
   add_allowed_hook(TS_HTTP_READ_REQUEST_HDR_HOOK);
+  add_allowed_hook(TS_HTTP_READ_RESPONSE_HDR_HOOK);
   add_allowed_hook(TS_REMAP_PSEUDO_HOOK);
 }
 

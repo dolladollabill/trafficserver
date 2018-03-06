@@ -75,12 +75,18 @@ public:
   mark_body_done()
   {
     body_done = true;
+    if (response_is_chunked()) {
+      ink_assert(chunked_handler.state == ChunkedHandler::CHUNK_READ_DONE ||
+                 chunked_handler.state == ChunkedHandler::CHUNK_READ_ERROR);
+      this->write_vio.nbytes = response_header.length_get() + chunked_handler.dechunked_size;
+    }
   }
 
   void
   update_sent_count(unsigned num_bytes)
   {
     bytes_sent += num_bytes;
+    this->write_vio.ndone += num_bytes;
   }
 
   Http2StreamId
@@ -147,12 +153,22 @@ public:
   VIO *do_io_write(Continuation *c, int64_t nbytes, IOBufferReader *abuffer, bool owner = false) override;
   void do_io_close(int lerrno = -1) override;
   void initiating_close();
+  void terminate_if_possible();
   void do_io_shutdown(ShutdownHowTo_t) override {}
-  void update_read_request(int64_t read_len, bool send_update);
-  bool update_write_request(IOBufferReader *buf_reader, int64_t write_len, bool send_update);
+  void update_read_request(int64_t read_len, bool send_update, bool check_eos = false);
+  void update_write_request(IOBufferReader *buf_reader, int64_t write_len, bool send_update);
+  void signal_write_event(bool call_update);
   void reenable(VIO *vio) override;
   virtual void transaction_done() override;
-  void send_response_body();
+  virtual bool
+  ignore_keep_alive() override
+  {
+    // If we return true here, Connection header will always be "close".
+    // It should be handled as the same as HTTP/1.1
+    return false;
+  }
+
+  void restart_sending();
   void push_promise(URL &url, const MIMEField *accept_encoding);
 
   // Stream level window size
@@ -231,6 +247,7 @@ private:
   void response_process_data(bool &is_done);
   bool response_is_data_available() const;
   Event *send_tracked_event(Event *event, int send_event, VIO *vio);
+  void send_response_body(bool call_update);
 
   HTTPParser http_parser;
   ink_hrtime _start_time = 0;
@@ -238,7 +255,6 @@ private:
   Http2StreamId _id;
   Http2StreamState _state = Http2StreamState::HTTP2_STREAM_STATE_IDLE;
 
-  MIOBuffer response_buffer;
   HTTPHdr _req_header;
   VIO read_vio;
   VIO write_vio;
@@ -274,7 +290,8 @@ private:
   uint64_t bytes_sent  = 0;
 
   ChunkedHandler chunked_handler;
-  Event *cross_thread_event = nullptr;
+  Event *cross_thread_event      = nullptr;
+  Event *buffer_full_write_event = nullptr;
 
   // Support stream-specific timeouts
   ink_hrtime active_timeout = 0;

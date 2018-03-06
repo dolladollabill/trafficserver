@@ -31,9 +31,12 @@
 #include "BIO_fastopen.h"
 #include "Log.h"
 #include "P_SSLClientUtils.h"
+#include "P_SSLSNI.h"
+#include "HttpTunnel.h"
 
 #include <climits>
 #include <string>
+#include <stdbool.h>
 
 #if !TS_USE_SET_RBIO
 // Defined in SSLInternal.c, should probably make a separate include
@@ -622,7 +625,7 @@ SSLNetVConnection::net_read_io(NetHandler *nh, EThread *lthread)
     read.triggered = 0;
     nh->read_ready_list.remove(this);
     Debug("ssl", "read_from_net, read finished - would block");
-#ifdef TS_USE_PORT
+#if TS_USE_PORT
     if (ret == SSL_READ_WOULD_BLOCK) {
       readReschedule(nh);
     } else {
@@ -797,7 +800,8 @@ SSLNetVConnection::load_buffer_and_write(int64_t towrite, MIOBufferAccessor &buf
       ERR_error_string_n(e, buf, sizeof(buf));
       TraceIn(trace, get_remote_addr(), get_remote_port(), "SSL Error: sslErr=%d, ERR_get_error=%ld (%s) errno=%d", err, e, buf,
               errno);
-      num_really_written = -errno;
+      // Treat SSL_ERROR_SSL as EPIPE error.
+      num_really_written = -EPIPE;
       SSL_CLR_ERR_INCR_DYN_STAT(this, ssl_error_ssl, "SSL_write-SSL_ERROR_SSL errno=%d", errno);
     } break;
     }
@@ -876,7 +880,12 @@ SSLNetVConnection::free(EThread *t)
 {
   ink_release_assert(t == this_ethread());
 
+  // cancel OOB
+  cancel_OOB();
   // close socket fd
+  if (con.fd != NO_FD) {
+    NET_SUM_GLOBAL_DYN_STAT(net_connections_currently_open_stat, -1);
+  }
   con.close();
 
   clear();
@@ -904,17 +913,22 @@ SSLNetVConnection::sslStartHandShake(int event, int &err)
   case SSL_EVENT_SERVER:
     if (this->ssl == nullptr) {
       SSLCertificateConfig::scoped_config lookup;
-      IpEndpoint ip;
-      int namelen = sizeof(ip);
-      safe_getsockname(this->get_socket(), &ip.sa, &namelen);
-      SSLCertContext *cc = lookup->find(ip);
+      IpEndpoint dst;
+      int namelen = sizeof(dst);
+      if (0 != safe_getsockname(this->get_socket(), &dst.sa, &namelen)) {
+        Debug("ssl", "Failed to get dest ip, errno = [%d]", errno);
+        return EVENT_ERROR;
+      }
+      SSLCertContext *cc = lookup->find(dst);
       if (is_debug_tag_set("ssl")) {
-        IpEndpoint src, dst;
+        IpEndpoint src;
         ip_port_text_buffer ipb1, ipb2;
-        int ip_len;
+        int ip_len = sizeof(src);
 
-        safe_getsockname(this->get_socket(), &dst.sa, &(ip_len = sizeof ip));
-        safe_getpeername(this->get_socket(), &src.sa, &(ip_len = sizeof ip));
+        if (0 != safe_getpeername(this->get_socket(), &src.sa, &ip_len)) {
+          Debug("ssl", "Failed to get src ip, errno = [%d]", errno);
+          return EVENT_ERROR;
+        }
         ats_ip_nptop(&dst, ipb1, sizeof(ipb1));
         ats_ip_nptop(&src, ipb2, sizeof(ipb2));
         Debug("ssl", "IP context is %p for [%s] -> [%s], default context %p", cc, ipb2, ipb1, lookup->defaultContext());
@@ -923,27 +937,25 @@ SSLNetVConnection::sslStartHandShake(int event, int &err)
       // Escape if this is marked to be a tunnel.
       // No data has been read at this point, so we can go
       // directly into blind tunnel mode
-      if (cc && SSLCertContext::OPT_TUNNEL == cc->opt && this->is_transparent) {
-        this->attributes     = HttpProxyPort::TRANSPORT_BLIND_TUNNEL;
-        sslHandShakeComplete = true;
-        SSL_free(this->ssl);
-        this->ssl = nullptr;
-        return EVENT_DONE;
+
+      if (cc && SSLCertContext::OPT_TUNNEL == cc->opt) {
+        if (this->is_transparent) {
+          this->attributes     = HttpProxyPort::TRANSPORT_BLIND_TUNNEL;
+          sslHandShakeComplete = 1;
+          SSL_free(this->ssl);
+          this->ssl = NULL;
+          return EVENT_DONE;
+        } else {
+          SSLConfig::scoped_config params;
+          this->SNIMapping = params->sni_map_enable;
+          hookOpRequested  = SSL_HOOK_OP_TUNNEL;
+        }
       }
 
       // Attach the default SSL_CTX to this SSL session. The default context is never going to be able
       // to negotiate a SSL session, but it's enough to trampoline us into the SNI callback where we
       // can select the right server certificate.
       this->ssl = make_ssl_connection(lookup->defaultContext(), this);
-
-#if !(TS_USE_TLS_SNI)
-      // set SSL trace
-      if (SSLConfigParams::ssl_wire_trace_enabled) {
-        bool trace = computeSSLTrace();
-        Debug("ssl", "sslnetvc. setting trace to=%s", trace ? "true" : "false");
-        setSSLTrace(trace);
-      }
-#endif
     }
 
     if (this->ssl == nullptr) {
@@ -954,42 +966,48 @@ SSLNetVConnection::sslStartHandShake(int event, int &err)
     return sslServerHandShakeEvent(err);
 
   case SSL_EVENT_CLIENT:
-    if (this->ssl == nullptr) {
-      SSL_CTX *clientCTX = nullptr;
-      if (this->options.clientCertificate) {
-        const char *certfile = (const char *)this->options.clientCertificate;
-        if (certfile != nullptr) {
-          clientCTX = params->getCTX(certfile);
-          if (clientCTX != nullptr) {
-            Debug("ssl", "context for %s is found at %p", this->options.clientCertificate.get(), (void *)clientCTX);
-          } else {
-            Debug("ssl", "failed to find context for %s", this->options.clientCertificate.get());
-          }
-        }
-      } else {
-        clientCTX = params->client_ctx;
-      }
 
-      if (this->options.clientVerificationFlag && params->clientCACertFilename != nullptr && params->clientCACertPath != nullptr) {
+    char buff[INET6_ADDRSTRLEN];
+
+    if (this->ssl == nullptr) {
+      // Making the check here instead of later, so we only
+      // do this setting immediately after we create the SSL object
+      SNIConfig::scoped_config sniParam;
+      int8_t clientVerify = 0;
+      cchar *serverKey    = this->options.sni_servername;
+      if (!serverKey) {
+        ats_ip_ntop(this->get_remote_addr(), buff, INET6_ADDRSTRLEN);
+        serverKey = buff;
+      }
+      auto nps           = sniParam->getPropertyConfig(serverKey);
+      SSL_CTX *clientCTX = nullptr;
+
+      if (nps) {
+        clientCTX    = nps->ctx;
+        clientVerify = nps->verifyLevel;
+      } else {
+        clientCTX    = params->client_ctx;
+        clientVerify = params->clientVerify;
+      }
+      if (!clientCTX) {
+        SSLErrorVC(this, "failed to create SSL client session");
+        return EVENT_ERROR;
+      }
+      if (clientVerify && params->clientCACertFilename != nullptr && params->clientCACertPath != nullptr) {
         if (!SSL_CTX_load_verify_locations(clientCTX, params->clientCACertFilename, params->clientCACertPath)) {
           SSLError("invalid client CA Certificate file (%s) or CA Certificate path (%s)", params->clientCACertFilename,
                    params->clientCACertPath);
           return EVENT_ERROR;
         }
       }
-      this->ssl = make_ssl_connection(clientCTX, this);
-      if (this->ssl != nullptr) {
-        uint8_t clientVerify = this->options.clientVerificationFlag;
-        int verifyValue      = clientVerify & 1 ? SSL_VERIFY_PEER : SSL_VERIFY_NONE;
-        SSL_set_verify(this->ssl, verifyValue, verify_callback);
-      }
 
+      this->ssl = make_ssl_connection(clientCTX, this);
       if (this->ssl == nullptr) {
         SSLErrorVC(this, "failed to create SSL client session");
         return EVENT_ERROR;
       }
+      SSL_set_verify(this->ssl, clientVerify ? SSL_VERIFY_PEER : SSL_VERIFY_NONE, verify_callback);
 
-#if TS_USE_TLS_SNI
       if (this->options.sni_servername) {
         if (SSL_set_tlsext_host_name(this->ssl, this->options.sni_servername)) {
           Debug("ssl", "using SNI name '%s' for client handshake", this->options.sni_servername.get());
@@ -998,7 +1016,6 @@ SSLNetVConnection::sslStartHandShake(int event, int &err)
           SSL_INCREMENT_DYN_STAT(ssl_sni_name_set_failure);
         }
       }
-#endif
     }
 
     return sslClientHandShakeEvent(err);
@@ -1013,7 +1030,8 @@ int
 SSLNetVConnection::sslServerHandShakeEvent(int &err)
 {
   // Continue on if we are in the invoked state.  The hook has not yet reenabled
-  if (sslHandshakeHookState == HANDSHAKE_HOOKS_CERT_INVOKE || sslHandshakeHookState == HANDSHAKE_HOOKS_PRE_INVOKE) {
+  if (sslHandshakeHookState == HANDSHAKE_HOOKS_CERT_INVOKE || sslHandshakeHookState == HANDSHAKE_HOOKS_CLIENT_CERT_INVOKE ||
+      sslHandshakeHookState == HANDSHAKE_HOOKS_PRE_INVOKE) {
     return SSL_WAIT_FOR_HOOK;
   }
 
@@ -1039,7 +1057,8 @@ SSLNetVConnection::sslServerHandShakeEvent(int &err)
   // Again no data has been exchanged, so we can go directly
   // without data replay.
   // Note we can't arrive here if a hook is active.
-  if (SSL_HOOK_OP_TUNNEL == hookOpRequested) {
+
+  if (SSL_HOOK_OP_TUNNEL == hookOpRequested && !SNIMapping) {
     this->attributes = HttpProxyPort::TRANSPORT_BLIND_TUNNEL;
     SSL_free(this->ssl);
     this->ssl = nullptr;
@@ -1067,16 +1086,16 @@ SSLNetVConnection::sslServerHandShakeEvent(int &err)
         if (retval < 0) {
           if (retval == -EAGAIN) {
             // No data at the moment, hang tight
-            SSLDebugVC(this, "SSL handshake: EAGAIN");
+            SSLVCDebug(this, "SSL handshake: EAGAIN");
             return SSL_HANDSHAKE_WANT_READ;
           } else {
             // An error, make us go away
-            SSLDebugVC(this, "SSL handshake error: read_retval=%d", retval);
+            SSLVCDebug(this, "SSL handshake error: read_retval=%d", retval);
             return EVENT_ERROR;
           }
         } else if (retval == 0) {
           // EOF, go away, we stopped in the handshake
-          SSLDebugVC(this, "SSL handshake error: EOF");
+          SSLVCDebug(this, "SSL handshake error: EOF");
           return EVENT_ERROR;
         }
       } else {
@@ -1090,12 +1109,12 @@ SSLNetVConnection::sslServerHandShakeEvent(int &err)
 
   if (ssl_error != SSL_ERROR_NONE) {
     err = errno;
-    SSLDebugVC(this, "SSL handshake error: %s (%d), errno=%d", SSLErrorName(ssl_error), ssl_error, err);
+    SSLVCDebug(this, "SSL handshake error: %s (%d), errno=%d", SSLErrorName(ssl_error), ssl_error, err);
 
     // start a blind tunnel if tr-pass is set and data does not look like ClientHello
     char *buf = handShakeBuffer ? handShakeBuffer->buf() : nullptr;
     if (getTransparentPassThrough() && buf && *buf != SSL_OP_HANDSHAKE) {
-      SSLDebugVC(this, "Data does not look like SSL handshake, starting blind tunnel");
+      SSLVCDebug(this, "Data does not look like SSL handshake, starting blind tunnel");
       this->attributes     = HttpProxyPort::TRANSPORT_BLIND_TUNNEL;
       sslHandShakeComplete = false;
       return EVENT_CONT;
@@ -1405,7 +1424,10 @@ SSLNetVConnection::reenable(NetHandler *nh)
   }
   if (curHook != nullptr) {
     // Invoke the hook and return, wait for next reenable
-    if (sslHandshakeHookState == HANDSHAKE_HOOKS_CERT) {
+    if (sslHandshakeHookState == HANDSHAKE_HOOKS_CLIENT_CERT) {
+      sslHandshakeHookState = HANDSHAKE_HOOKS_CLIENT_CERT_INVOKE;
+      curHook->invoke(TS_EVENT_SSL_VERIFY_CLIENT, this);
+    } else if (sslHandshakeHookState == HANDSHAKE_HOOKS_CERT) {
       sslHandshakeHookState = HANDSHAKE_HOOKS_CERT_INVOKE;
       curHook->invoke(TS_EVENT_SSL_CERT, this);
     } else if (sslHandshakeHookState == HANDSHAKE_HOOKS_SNI) {
@@ -1428,6 +1450,10 @@ SSLNetVConnection::reenable(NetHandler *nh)
       break;
     case HANDSHAKE_HOOKS_CERT:
     case HANDSHAKE_HOOKS_CERT_INVOKE:
+      sslHandshakeHookState = HANDSHAKE_HOOKS_CLIENT_CERT;
+      break;
+    case HANDSHAKE_HOOKS_CLIENT_CERT:
+    case HANDSHAKE_HOOKS_CLIENT_CERT_INVOKE:
       sslHandshakeHookState = HANDSHAKE_HOOKS_DONE;
       break;
     default:
@@ -1441,24 +1467,23 @@ SSLNetVConnection::reenable(NetHandler *nh)
 bool
 SSLNetVConnection::sslContextSet(void *ctx)
 {
-#if TS_USE_TLS_SNI
   bool zret = true;
   if (ssl) {
     SSL_set_SSL_CTX(ssl, static_cast<SSL_CTX *>(ctx));
   } else {
     zret = false;
   }
-#else
-  bool zret      = false;
-#endif
   return zret;
 }
+
+extern TunnelHashMap TunnelMap; // stores the name of the servers to tunnel to
 
 bool
 SSLNetVConnection::callHooks(TSEvent eventId)
 {
   // Only dealing with the SNI/CERT hook so far.
-  ink_assert(eventId == TS_EVENT_SSL_CERT || eventId == TS_EVENT_SSL_SERVERNAME || eventId == TS_EVENT_SSL_SERVER_VERIFY_HOOK);
+  ink_assert(eventId == TS_EVENT_SSL_CERT || eventId == TS_EVENT_SSL_SERVERNAME || eventId == TS_EVENT_SSL_SERVER_VERIFY_HOOK ||
+             eventId == TS_EVENT_SSL_VERIFY_CLIENT);
   Debug("ssl", "callHooks sslHandshakeHookState=%d", this->sslHandshakeHookState);
 
   // Move state if it is appropriate
@@ -1507,9 +1532,17 @@ SSLNetVConnection::callHooks(TSEvent eventId)
       curHook = curHook->next();
     }
     if (curHook == nullptr) {
-      this->sslHandshakeHookState = HANDSHAKE_HOOKS_DONE;
+      this->sslHandshakeHookState = HANDSHAKE_HOOKS_CLIENT_CERT;
     } else {
       this->sslHandshakeHookState = HANDSHAKE_HOOKS_CERT_INVOKE;
+    }
+    break;
+  case HANDSHAKE_HOOKS_CLIENT_CERT:
+  case HANDSHAKE_HOOKS_CLIENT_CERT_INVOKE:
+    if (!curHook) {
+      curHook = ssl_hooks->get(TS_SSL_VERIFY_CLIENT_INTERNAL_HOOK);
+    } else {
+      curHook = curHook->next();
     }
     break;
   default:
@@ -1519,6 +1552,26 @@ SSLNetVConnection::callHooks(TSEvent eventId)
   }
 
   Debug("ssl", "callHooks iterated to curHook=%p", curHook);
+
+  this->serverName = const_cast<char *>(SSL_get_servername(this->ssl, TLSEXT_NAMETYPE_host_name));
+  if (this->serverName) {
+    auto *hs = TunnelMap.find(this->serverName);
+    if (hs != nullptr) {
+      this->SNIMapping = true;
+      this->attributes = HttpProxyPort::TRANSPORT_BLIND_TUNNEL;
+      return EVENT_DONE;
+    }
+  }
+
+  if (SSL_HOOK_OP_TUNNEL == hookOpRequested && SNIMapping) {
+    this->attributes = HttpProxyPort::TRANSPORT_BLIND_TUNNEL;
+    // Don't mark the handshake as complete yet,
+    // Will be checking for that flag not being set after
+    // we get out of this callback, and then will shuffle
+    // over the buffered handshake packets to the O.S.
+    // sslHandShakeComplete = 1;
+    return EVENT_DONE;
+  }
 
   bool reenabled = true;
   if (curHook != nullptr) {
@@ -1534,8 +1587,7 @@ SSLNetVConnection::callHooks(TSEvent eventId)
 bool
 SSLNetVConnection::computeSSLTrace()
 {
-// this has to happen before the handshake or else sni_servername will be nullptr
-#if TS_USE_TLS_SNI
+  // this has to happen before the handshake or else sni_servername will be nullptr
   bool sni_trace;
   if (ssl) {
     const char *ssl_servername   = SSL_get_servername(ssl, TLSEXT_NAMETYPE_host_name);
@@ -1545,9 +1597,6 @@ SSLNetVConnection::computeSSLTrace()
   } else {
     sni_trace = false;
   }
-#else
-  bool sni_trace = false;
-#endif
 
   // count based on ip only if they set an IP value
   const sockaddr *remote_addr = get_remote_addr();

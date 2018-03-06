@@ -167,6 +167,12 @@ public:
     return transparentPassThrough;
   }
 
+  bool
+  GetSNIMapping()
+  {
+    return SNIMapping;
+  }
+
   void
   setTransparentPassThrough(bool val)
   {
@@ -249,6 +255,13 @@ public:
         }
       }
       break;
+    case HANDSHAKE_HOOKS_CLIENT_CERT:
+    case HANDSHAKE_HOOKS_CLIENT_CERT_INVOKE:
+      if (eventId == TS_EVENT_SSL_VERIFY_CLIENT || eventId == TS_EVENT_VCONN_PRE_ACCEPT) {
+        retval = true;
+      }
+      break;
+
     case HANDSHAKE_HOOKS_DONE:
       retval = true;
       break;
@@ -296,6 +309,7 @@ public:
   ink_hrtime sslHandshakeEndTime   = 0;
   ink_hrtime sslLastWriteTime      = 0;
   int64_t sslTotalBytesSent        = 0;
+  char *serverName                 = nullptr;
 
   /// Set by asynchronous hooks to request a specific operation.
   SslVConnOp hookOpRequested = SSL_HOOK_OP_DEFAULT;
@@ -328,6 +342,8 @@ private:
     HANDSHAKE_HOOKS_SNI,
     HANDSHAKE_HOOKS_CERT,
     HANDSHAKE_HOOKS_CERT_INVOKE,
+    HANDSHAKE_HOOKS_CLIENT_CERT,
+    HANDSHAKE_HOOKS_CLIENT_CERT_INVOKE,
     HANDSHAKE_HOOKS_DONE
   } sslHandshakeHookState = HANDSHAKE_HOOKS_PRE;
 
@@ -335,6 +351,7 @@ private:
   Continuation *npnEndpoint        = nullptr;
   SessionAccept *sessionAcceptPtr  = nullptr;
   bool sslTrace                    = false;
+  bool SNIMapping                  = false;
 };
 
 typedef int (SSLNetVConnection::*SSLNetVConnHandler)(int, void *);

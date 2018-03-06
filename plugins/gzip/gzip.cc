@@ -663,8 +663,9 @@ transformable(TSHttpTxn txnp, bool server, HostConfiguration *host_configuration
 
   resp_status = TSHttpHdrStatusGet(bufp, hdr_loc);
 
-  // conservatively pick some statusses to compress
-  if (!(resp_status == 200 || resp_status == 404 || resp_status == 500)) {
+  // For now, only do gzip / brotli on 200 responses, dealing with error responses can mess up plugins
+  // like the escalate.so plugin, and possibly the escalation feature of parent.config. See #2913.
+  if (resp_status != 200) {
     info("http response status [%d] is not compressible", resp_status);
     TSHandleMLocRelease(bufp, TS_NULL_MLOC, hdr_loc);
     return 0;
@@ -1032,7 +1033,7 @@ TSRemapInit(TSRemapInterface *api_info, char *errbuf, int errbuf_size)
   }
 
   if (api_info->tsremap_version < TSREMAP_VERSION) {
-    snprintf(errbuf, errbuf_size - 1, "[TSRemapInit] - Incorrect API version %ld.%ld", api_info->tsremap_version >> 16,
+    snprintf(errbuf, errbuf_size, "[TSRemapInit] - Incorrect API version %ld.%ld", api_info->tsremap_version >> 16,
              (api_info->tsremap_version & 0xffff));
     return TS_ERROR;
   }

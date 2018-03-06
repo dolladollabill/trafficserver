@@ -40,7 +40,7 @@
 
 /* Some defines that might be candidates for configurable settings later.
  */
-#define HTTP_SSN_TXN_MAX_USER_ARG 16 /* max number of user arguments for Transactions and Sessions */
+#define TS_HTTP_MAX_USER_ARG 16 /* max number of user arguments for Transactions and Sessions */
 
 typedef int8_t TSMgmtByte; // Not for external use
 
@@ -53,7 +53,7 @@ enum CacheInfoMagic {
 };
 
 struct CacheInfo {
-  INK_MD5 cache_key;
+  CryptoHash cache_key;
   CacheFragType frag_type;
   char *hostname;
   int len;
@@ -282,6 +282,8 @@ typedef enum {
   TS_SSL_CERT_INTERNAL_HOOK,
   TS_SSL_SERVERNAME_INTERNAL_HOOK,
   TS_SSL_SERVER_VERIFY_INTERNAL_HOOK,
+  TS_SSL_VERIFY_CLIENT_INTERNAL_HOOK,
+  TS_SSL_SESSION_INTERNAL_HOOK,
   TS_SSL_INTERNAL_LAST_HOOK
 } TSSslHookInternalID;
 

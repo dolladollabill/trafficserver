@@ -28,7 +28,9 @@
 #include "ts/ink_defs.h"
 #include "ts/CryptoHash.h"
 
-class MD5Context : public CryptoContext
+#ifndef TS_ENABLE_FIPS
+
+class MD5Context : public ats::CryptoContextBase
 {
 protected:
   MD5_CTX _ctx;
@@ -42,5 +44,6 @@ public:
 };
 
 typedef CryptoHash INK_MD5;
+#endif
 
 #endif
