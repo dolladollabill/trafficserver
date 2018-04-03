@@ -50,6 +50,8 @@ TSMgmtError ServerBacktrace(unsigned options, char **trace);
 TSMgmtError Reconfigure();                                                         // TS reread config files
 TSMgmtError Restart(unsigned options);                                             // restart TM
 TSMgmtError Bounce(unsigned options);                                              // restart traffic_server
+TSMgmtError Stop(unsigned options);                                                // stop traffic_server
+TSMgmtError Drain(unsigned options);                                               // drain requests of traffic_server
 TSMgmtError StorageDeviceCmdOffline(const char *dev);                              // Storage device operation.
 TSMgmtError LifecycleMessage(const char *tag, void const *data, size_t data_size); // Lifecycle alert to plugins.
 
@@ -81,6 +83,8 @@ TSMgmtError EventIsActive(const char *event_name, bool *is_current);
 TSMgmtError EventSignalCbRegister(const char *event_name, TSEventSignalFunc func, void *data);
 TSMgmtError EventSignalCbUnregister(const char *event_name, TSEventSignalFunc func);
 
+TSMgmtError HostStatusSetDown(const char *name);
+TSMgmtError HostStatusSetUp(const char *name);
 TSMgmtError StatsReset(const char *name = NULL);
 
 #endif

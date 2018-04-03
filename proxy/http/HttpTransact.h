@@ -36,11 +36,10 @@
 #include "ProxyConfig.h"
 #include "Transform.h"
 #include "Milestones.h"
-//#include "HttpAuthParams.h"
 #include "api/ts/remap.h"
 #include "RemapPluginInfo.h"
 #include "UrlMapping.h"
-#include <records/I_RecHttp.h>
+#include "records/I_RecHttp.h"
 
 #define MAX_DNS_LOOKUPS 2
 
@@ -421,10 +420,8 @@ public:
     SM_ACTION_INTERNAL_REQUEST,
     SM_ACTION_SEND_ERROR_CACHE_NOOP,
 
-#ifdef PROXY_DRAIN
-    SM_ACTION_DRAIN_REQUEST_BODY,
-#endif /* PROXY_DRAIN */
-
+    SM_ACTION_WAIT_FOR_FULL_BODY,
+    SM_ACTION_REQUEST_BUFFER_READ_COMPLETE,
     SM_ACTION_SERVE_FROM_CACHE,
     SM_ACTION_SERVER_READ,
     SM_ACTION_SERVER_PARSE_NEXT_HDR,
@@ -957,6 +954,7 @@ public:
   static void PerformRemap(State *s);
   static void ModifyRequest(State *s);
   static void HandleRequest(State *s);
+  static void HandleRequestBufferDone(State *s);
   static bool handleIfRedirect(State *s);
 
   static void StartAccessControl(State *s);

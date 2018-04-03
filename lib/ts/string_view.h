@@ -35,12 +35,18 @@
 #include <ostream>
 #include <cstring>
 
-#if __cplusplus < 201402
+#if __cplusplus < 201402L
 #define CONSTEXPR14 inline
 #else
 #define CONSTEXPR14 constexpr
 #endif
 
+#if __cplusplus >= 201703L
+namespace ts
+{
+using string_view = std::string_view;
+}
+#else
 namespace ts
 {
 // forward declare class for iterator friend relationship
@@ -358,9 +364,8 @@ public:
 
   CONSTEXPR14 void remove_prefix(const size_type length) noexcept // strengthened
   {                                                               // chop off the beginning
-    auto tmp = std::min(length, m_size);
-    m_data += tmp;
-    m_size -= tmp;
+    m_data += length;
+    m_size -= length;
   }
 
   CONSTEXPR14 void remove_suffix(const size_type length) noexcept // strengthened
@@ -1220,10 +1225,17 @@ template <class _Type, class _Traits> struct hash<ts::basic_string_view<_Type, _
   size_t
   operator()(string_type const &x) const
   {
-    return hash<typename string_type::const_pointer>()(x.data());
+// not what I would normally do.. but better than making a custom hash function at the moment.
+// This should also mean we have some consistent behavior with std code
+#if defined(__linux__)
+    return std::_Hash_impl::hash(x.data(), x.length() * sizeof(typename string_type::value_type));
+#elif defined(freebsd) || defined(darwin)
+    return __do_string_hash(x.data(), x.data() + x.size());
+#endif
   }
 };
 }
+#endif
 
 /// Literal suffix for string_view.
 /// @note This enables @c string_view literals from C++ string literals in @c constexpr contexts, which

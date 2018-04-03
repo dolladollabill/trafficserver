@@ -3438,27 +3438,11 @@ UrlHashTable::~UrlHashTable()
 } // UrlHashTable::~UrlHashTable
 
 static int
-ink_code_md5(unsigned const char *input, int input_length, unsigned char *sixteen_byte_hash_pointer)
-{
-  MD5_CTX context;
-
-  MD5_Init(&context);
-  MD5_Update(&context, input, input_length);
-  MD5_Final(sixteen_byte_hash_pointer, &context);
-
-  return (0);
-}
-
-static int
 seen_it(char *url)
 {
   if (!url_hash_entries) {
     return 0;
   }
-  union {
-    unsigned char md5[16];
-    uint64_t i[2];
-  } u;
   int l      = 0;
   char *para = strrchr(url, '#');
   if (para) {
@@ -3466,8 +3450,9 @@ seen_it(char *url)
   } else {
     l = strlen(url);
   }
-  ink_code_md5((unsigned char *)url, l, u.md5);
-  uint64_t x = u.i[0] + u.i[1];
+  CryptoHash hash;
+  CryptoContext().hash_immediate(hash, reinterpret_cast<void *>(url), l);
+  uint64_t x = hash.fold();
   if (uniq_urls->is_set(x)) {
     if (verbose) {
       printf("YES: seen it '%s'\n", url);
